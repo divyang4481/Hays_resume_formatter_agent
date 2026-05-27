@@ -308,45 +308,6 @@ def _field_has_evidence(field: dict[str, Any], template_text_lower: str, token_v
     return False
 
 
-def _inject_required_hays_fields(fields: list[dict[str, Any]], template_text: str) -> list[dict[str, Any]]:
-    text = template_text.lower()
-    by_name = {f.get("name"): f for f in fields if f.get("name")}
-
-    def upsert(name: str, template_token: str, source_hint: str, field_type: str, source_classification: str, formatting_hint: str = "plain_text"):
-        if name in by_name:
-            return
-        by_name[name] = {
-            "name": name,
-            "field_type": field_type,
-            "source_classification": source_classification,
-            "source_hint": source_hint,
-            "template_token": template_token,
-            "required": True,
-            "formatting_hint": formatting_hint,
-            "injection_details": {
-                "injection_type": "mergefield" if template_token.upper().startswith("MERGEFIELD") else "text_placeholder",
-                "mergefield_name": template_token.replace("MERGEFIELD", "").strip() if template_token.upper().startswith("MERGEFIELD") else None,
-                "placeholder_text": template_token if template_token.startswith("[") or template_token.startswith('"') else None,
-                "locations": [],
-            },
-        }
-
-    if "current salary & benefits" in text:
-        upsert("current_salary_benefits", "[Type text]", "Current salary & benefits", "scalar", "input_only")
-    if "salary required" in text:
-        upsert("salary_required", "[Type text]", "Salary required", "scalar", "input_only")
-    if "notice period" in text:
-        upsert("notice_period", "MERGEFIELD NoticePeriod", "Notice period", "scalar", "input_only")
-    if "professional qualifications" in text:
-        upsert("professional_qualifications", "[Type text]", "Professional qualifications", "array", "resume_fact", "bullet_list")
-    if "current position" in text:
-        upsert("current_position", '"Use bullets if required"', "Current position", "array", "resume_fact", "bullet_list")
-    if "interests and activities" in text:
-        upsert("interests_and_activities", "[Bullet point list]", "INTERESTS AND ACTIVITIES", "array", "resume_fact", "bullet_list")
-
-    return list(by_name.values())
-
-
 def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
     try:
         # Load the DOCX bytes from the object store
@@ -468,7 +429,6 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
             or any(phrase in template_text_lower for phrase in ["candidate's own cv", "candidate cv", "paste the candidate's own cv", "original cv"])
         ]
         normalized_fields = [f for f in normalized_fields if _field_has_evidence(f, template_text_lower, token_values)]
-        normalized_fields = _inject_required_hays_fields(normalized_fields, template_text)
 
         if normalized_fields:
             state["fields"] = normalized_fields
