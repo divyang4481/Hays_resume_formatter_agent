@@ -9,7 +9,8 @@ from langgraph.graph import END, StateGraph
 from src.shared.models import GraphResult, JobStatus
 from src.worker.agentic_core import AgenticCore
 from src.worker.agents.resume_formatter.template_suggestion import TemplateSuggestionService
-from src.worker.agents.resume_formatter.injector import inject_data_into_docx
+from src.worker.agents.resume_formatter.injector import inject_render_payload_into_docx
+from src.worker.agents.resume_formatter.render_payload_builder import build_filled_template_payload
 
 
 class ResumeFormatState(TypedDict):
@@ -20,6 +21,8 @@ class ResumeFormatState(TypedDict):
     raw_resume_text: str | None
     suggested_templates: list[dict]
     manifest: dict[str, Any] | None
+    mapping_result: dict[str, Any]
+    render_payload: dict[str, Any]
     extracted: dict[str, Any]
     filled_manifest: dict[str, Any] | None
     rendered_bytes: bytes | None
@@ -81,7 +84,7 @@ def load_template_manifest(state: ResumeFormatState) -> ResumeFormatState:
     return state
 
 
-def extract_data_for_manifest(state: ResumeFormatState) -> ResumeFormatState:
+def map_resume_to_manifest(state: ResumeFormatState) -> ResumeFormatState:
     if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
         return state
 
@@ -101,23 +104,32 @@ def extract_data_for_manifest(state: ResumeFormatState) -> ResumeFormatState:
     except Exception as e:
         print(f"[ExtractData] LLM extraction failed ({e}), using heuristic fallback")
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        extracted = {
-            "candidate_name": lines[0] if lines else "Unknown Candidate",
-            "candidate_fullname": lines[0] if lines else "Unknown Candidate",
-            "candidate_email": next((x for x in lines if "@" in x), ""),
-        }
+        extracted = {"field_mappings": {
+            "candidate_name": {"value": lines[0] if lines else "Unknown Candidate"},
+            "candidate_fullname": {"value": lines[0] if lines else "Unknown Candidate"},
+            "candidate_email": {"value": next((x for x in lines if "@" in x), "")},
+        }}
 
-    state["extracted"] = extracted
+    state["mapping_result"] = extracted
+    state["extracted"] = {k: v.get("value") for k, v in extracted.get("field_mappings", {}).items()}
+    return state
 
-    # Build filled_manifest — complete structure with all field values
-    filled_manifest: dict[str, Any] = {
+
+def build_render_payload(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+    manifest = state.get("manifest") or {"fields": []}
+    mapping_result = state.get("mapping_result") or {}
+    payload = build_filled_template_payload(manifest, mapping_result)
+    state["render_payload"] = payload
+    state["filled_manifest"] = {
         "manifest_id": manifest.get("manifest_id", str(uuid4())),
         "template_id": state.get("template_id"),
         "filled_at": datetime.now(timezone.utc).isoformat(),
-        "fields": fields,
-        "filled_values": {f.get("name", ""): extracted.get(f.get("name", "")) for f in fields},
+        "manifest": manifest,
+        "mapping_result": mapping_result,
+        "render_payload": payload,
     }
-    state["filled_manifest"] = filled_manifest
     return state
 
 
@@ -126,7 +138,7 @@ def render_resume(state: ResumeFormatState) -> ResumeFormatState:
         return state
 
     template_id = state["template_id"]
-    extracted = state["extracted"]
+    payload = state.get("render_payload") or {}
     manifest = state.get("manifest") or {"fields": []}
     manifest_fields = manifest.get("fields", [])
 
@@ -141,8 +153,8 @@ def render_resume(state: ResumeFormatState) -> ResumeFormatState:
 
     try:
         template_bytes = object_store.get_bytes(template["object_key"])
-        print(f"[RenderResume] Injecting {len(extracted)} values into template using injection_details...")
-        docx_bytes = inject_data_into_docx(template_bytes, extracted, manifest_fields)
+        print("[RenderResume] Injecting deterministic render payload into template...")
+        docx_bytes = inject_render_payload_into_docx(template_bytes, payload, manifest)
         state["rendered_bytes"] = docx_bytes
         state["status"] = JobStatus.COMPLETED
         print(f"[RenderResume] Rendered DOCX: {len(docx_bytes)} bytes")
@@ -172,7 +184,8 @@ def build_resume_format_graph():
     graph.add_node("load_resume_input", load_resume_input)
     graph.add_node("resolve_or_suggest_template", resolve_or_suggest_template)
     graph.add_node("load_template_manifest", load_template_manifest)
-    graph.add_node("extract_data_for_manifest", extract_data_for_manifest)
+    graph.add_node("map_resume_to_manifest", map_resume_to_manifest)
+    graph.add_node("build_render_payload", build_render_payload)
     graph.add_node("render_resume", render_resume)
 
     graph.set_entry_point("load_resume_input")
@@ -182,8 +195,9 @@ def build_resume_format_graph():
         route_after_suggest,
         {"load_template_manifest": "load_template_manifest", END: END},
     )
-    graph.add_edge("load_template_manifest", "extract_data_for_manifest")
-    graph.add_edge("extract_data_for_manifest", "render_resume")
+    graph.add_edge("load_template_manifest", "map_resume_to_manifest")
+    graph.add_edge("map_resume_to_manifest", "build_render_payload")
+    graph.add_edge("build_render_payload", "render_resume")
     graph.add_edge("render_resume", END)
     return graph.compile()
 
@@ -204,6 +218,8 @@ def run_resume_format(
             "raw_resume_text": None,
             "suggested_templates": [],
             "manifest": None,
+            "mapping_result": {},
+            "render_payload": {},
             "extracted": {},
             "filled_manifest": None,
             "rendered_bytes": None,
