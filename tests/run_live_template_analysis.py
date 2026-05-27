@@ -175,6 +175,8 @@ def main() -> None:
     # 3. Fetch & print manifest
     manifest = fetch_manifest(template_id, args.host)
     print_manifest(manifest)
+    print("\n[Full Manifest JSON]")
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
     # 4. Optionally save raw JSON
     if args.save_manifest:
