@@ -1,8 +1,6 @@
-Extract values from the resume below for each field defined.
+Map resume data to the manifest fields below.
 
 ## Field Definitions
-Each field has: name, field_type, source_classification, source_hint, formatting_hint, and optionally sub_fields.
-
 ```json
 {{ fields_json }}
 ```
@@ -12,22 +10,21 @@ Each field has: name, field_type, source_classification, source_hint, formatting
 {{ resume_text }}
 ```
 
-## Output Format
-Return ONLY this JSON structure with ALL field names present:
+Return ONLY JSON with this shape:
 ```json
 {
-  "extracted": {
-    "field_name_1": "scalar value or null",
-    "field_name_2": ["array", "of", "strings"],
-    "field_name_3": [{"sub_field_a": "value", "sub_field_b": "value"}],
-    "field_name_4": null
-  }
+  "field_mappings": {
+    "field_name": {
+      "value": null,
+      "confidence": 0.0,
+      "status": "mapped|missing|needs_input",
+      "source": {
+        "section": null,
+        "evidence_text": null,
+        "page": null
+      }
+    }
+  },
+  "missing_fields_requiring_recruiter_or_ats_input": []
 }
 ```
-
-Remember:
-- Every field name from the definitions MUST appear in "extracted"
-- Use the correct type for each field (scalar string, array, array_object, or null)
-- `input_only` fields = null (recruiter fills these)
-- `generated` fields = write professional prose based on the resume
-- Return ONLY the JSON block above — no extra text

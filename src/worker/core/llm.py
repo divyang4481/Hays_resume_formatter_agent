@@ -120,10 +120,25 @@ class LLMClient:
             cleaned_text = markdown_match.group(1).strip()
 
         payload = json.loads(cleaned_text)
+        if isinstance(payload.get("field_mappings"), dict):
+            return payload
+
         extracted = payload.get("extracted", {})
         if not isinstance(extracted, dict):
-            raise ValueError("Invalid Bedrock payload: 'extracted' is not a dictionary")
-        return extracted
+            raise ValueError("Invalid Bedrock payload: expected 'field_mappings' or 'extracted'")
+
+        return {
+            "field_mappings": {
+                k: {
+                    "value": v,
+                    "confidence": 0.6 if v not in (None, [], "") else 0.0,
+                    "status": "mapped" if v not in (None, [], "") else "missing",
+                    "source": {"section": None, "evidence_text": None, "page": None},
+                }
+                for k, v in extracted.items()
+            },
+            "missing_fields_requiring_recruiter_or_ats_input": [],
+        }
 
     def _call_bedrock(self, *, system_prompt: str, user_prompt: str, model: str, max_tokens: int, temperature: float = 0.1) -> str:
         text, _ = self._call_bedrock_with_usage(

@@ -538,3 +538,13 @@ def inject_data_into_docx(
     out_io = BytesIO()
     doc.save(out_io)
     return out_io.getvalue()
+
+
+def inject_render_payload_into_docx(template_bytes: bytes, payload: dict, manifest: dict) -> bytes:
+    fields = manifest.get("fields", []) if isinstance(manifest, dict) else []
+    data = {}
+    data.update(payload.get("render_values", {}))
+    data.update(payload.get("placeholder_values", {}))
+    for block_name, items in (payload.get("repeat_blocks", {}) or {}).items():
+        data[block_name] = items
+    return inject_data_into_docx(template_bytes, data, fields)

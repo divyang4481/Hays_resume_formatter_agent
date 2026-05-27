@@ -386,6 +386,10 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
                     inj = {"injection_type": "text_placeholder", "placeholder_text": fallback_token, "locations": []}
 
             entry["injection_details"] = inj
+            entry["semantic_contract"] = field.get("semantic_contract", {"business_meaning": "", "resume_search_intent": "", "acceptable_sources": [], "do_not_infer": []})
+            entry["extraction_contract"] = field.get("extraction_contract", {"llm_output_key": field_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": source_hint})
+            entry["render_contract"] = field.get("render_contract", {"render_strategy": "mergefield_replace" if inj.get("injection_type") == "mergefield" else "placeholder_replace", "anchor_token": fallback_token, "formatting": {}, "empty_value_policy": "remove_placeholder"})
+            entry["validation_contract"] = field.get("validation_contract", {"required": required, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"})
 
             # Preserve sub_fields for array_object types
             sub_fields = field.get("sub_fields")
@@ -419,6 +423,10 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
                 "required": required,
                 "formatting_hint": formatting_hint,
                 "injection_details": inj,
+                "semantic_contract": {"business_meaning": "", "resume_search_intent": "", "acceptable_sources": [], "do_not_infer": []},
+                "extraction_contract": {"llm_output_key": normalized_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": source_hint},
+                "render_contract": {"render_strategy": "mergefield_replace" if inj.get("injection_type") == "mergefield" else "placeholder_replace", "anchor_token": original_token, "formatting": {}, "empty_value_policy": "remove_placeholder"},
+                "validation_contract": {"required": required, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"},
             }
         )
 
@@ -448,7 +456,8 @@ def run_template_analysis(template_id: str, template_name: str, template_object_
     manifest = {
         "manifest_id": str(uuid4()),
         "template_id": template_id,
-        "version": 1,
+        "version": 2,
+        "manifest_schema": "template_manifest_v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "fields": result["fields"],
     }
