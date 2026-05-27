@@ -100,7 +100,10 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
 
         if str(field.get("name") or "").strip().lower() == "candidate_own_cv":
             continue
-        if token in {"[Current salary & benefits]", "[Salary required]", "[Current position]"} and token not in placeholder_tokens:
+        # Generic label-as-token guard: if the token looks like a bracket placeholder,
+        # it must exist in source placeholders for this field.
+        token_str = str(token).strip()
+        if token_str.startswith("[") and token_str.endswith("]") and token_str not in placeholder_tokens:
             continue
         if template_evidence.get("placeholder_text") and field.get("template_token") and template_evidence.get("placeholder_text") != field.get("template_token"):
             continue

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -21,6 +22,10 @@ from src.worker.agents.template_analysis.manifest_critic import critique_manifes
 from src.worker.agents.template_analysis.manifest_validator import validate_manifest_fields_against_layout
 
 
+logger = logging.getLogger(__name__)
+PIPELINE_VERSION = "layout_v2_agentic_qc"
+
+
 class TemplateAnalysisState(TypedDict):
     template_id: str
     template_name: str
@@ -38,6 +43,8 @@ def _load_template_bytes(state: TemplateAnalysisState) -> TemplateAnalysisState:
 
 
 def _extract_evidence(state: TemplateAnalysisState) -> TemplateAnalysisState:
+    logger.info("[TemplateAnalysis] pipeline_version=%s", PIPELINE_VERSION)
+    logger.info("[TemplateAnalysis] graph_file=src/worker/agents/template_analysis/graph.py")
     tb = state["template_bytes"]
     ox = extract_openxml_evidence(tb)
     pd = extract_python_docx_evidence(tb)
@@ -61,11 +68,17 @@ def _plan_and_validate(state: TemplateAnalysisState) -> TemplateAnalysisState:
         field_candidates=state.get("field_candidates", []),
         repeat_groups=state["layout"].get("repeat_groups", []),
     )
-    validated = validate_manifest_fields_against_layout(planned.get("fields", []), {"blocks": state["layout"].get("canonical_blocks", [])})
+    planned_fields = planned.get("fields", [])
+    validated = validate_manifest_fields_against_layout(planned_fields, {"blocks": state["layout"].get("canonical_blocks", [])})
     critique = critique_manifest_against_evidence({"fields": validated}, state["layout"])
     if not critique["passed"]:
         validated = validate_manifest_fields_against_layout(validated, {"blocks": state["layout"].get("canonical_blocks", [])})
     state["fields"] = validated
+    logger.info("[TemplateAnalysis] manifest_version=2")
+    logger.info("[TemplateAnalysis] blocks_count=%s", len(state["layout"].get("canonical_blocks", [])))
+    logger.info("[TemplateAnalysis] repeat_groups_count=%s", len(state["layout"].get("repeat_groups", [])))
+    logger.info("[TemplateAnalysis] fields_count=%s", len(validated))
+    logger.info("[TemplateAnalysis] rejected_fields_count=%s", max(0, len(planned_fields) - len(validated)))
     return state
 
 
