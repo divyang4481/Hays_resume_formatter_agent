@@ -22,6 +22,23 @@ class AgenticCore:
             use_strong_model=use_strong_model,
         )
 
+    def plan_manifest_from_evidence(
+        self,
+        *,
+        template_name: str,
+        canonical_blocks: list[dict],
+        field_candidates: list[dict],
+        repeat_groups: list[dict],
+        use_strong_model: bool = True,
+    ) -> dict:
+        return self.llm.plan_manifest_from_evidence(
+            template_name=template_name,
+            canonical_blocks=canonical_blocks,
+            field_candidates=field_candidates,
+            repeat_groups=repeat_groups,
+            use_strong_model=use_strong_model,
+        )
+
     def extract_resume_fields(
         self,
         *,

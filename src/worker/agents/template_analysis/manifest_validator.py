@@ -60,16 +60,16 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
                 logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
                 continue
 
-        evidence = field.get("template_evidence") or {}
-        if not evidence:
+        template_evidence = field.get("template_evidence") or {}
+        if not template_evidence:
             reject_reason = "missing_template_evidence"
             logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
             continue
-        evidence.setdefault("section_heading", blocks[source_ids[0]].get("section_heading"))
-        evidence.setdefault("label_text", blocks[source_ids[0]].get("label_text"))
-        evidence.setdefault("placeholder_text", blocks[source_ids[0]].get("placeholder_text"))
-        evidence.setdefault("evidence_text", blocks[source_ids[0]].get("evidence_text"))
-        field["template_evidence"] = evidence
+        template_evidence.setdefault("section_heading", blocks[source_ids[0]].get("section_heading"))
+        template_evidence.setdefault("label_text", blocks[source_ids[0]].get("label_text"))
+        template_evidence.setdefault("placeholder_text", blocks[source_ids[0]].get("placeholder_text"))
+        template_evidence.setdefault("evidence_text", blocks[source_ids[0]].get("evidence_text"))
+        field["template_evidence"] = template_evidence
 
         field_invalid = False
         for bid in source_ids:
@@ -98,6 +98,14 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
             continue
 
+        if str(field.get("name") or "").strip().lower() == "candidate_own_cv":
+            continue
+        if token in {"[Current salary & benefits]", "[Salary required]", "[Current position]"} and token not in placeholder_tokens:
+            continue
+        if template_evidence.get("placeholder_text") and field.get("template_token") and template_evidence.get("placeholder_text") != field.get("template_token"):
+            continue
+        if field.get("template_token") == "[Type text]" and not (rc.get("occurrence_selector") or {}).get("source_block_id"):
+            continue
         sub_fields = field.get("sub_fields")
         if isinstance(sub_fields, list):
             kept = [sf for sf in sub_fields if sf.get("template_token") and sf.get("name")]
