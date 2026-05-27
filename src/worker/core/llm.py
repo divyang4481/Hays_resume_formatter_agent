@@ -161,171 +161,22 @@ class LLMClient:
         except Exception as e:
             print(f"[PlanManifest] LLM planning failed: {e}. Using deterministic programmatic planner fallback.")
             
-        # 100% Generic dynamic pattern normalizer fallback
+        # 100% Generic dynamic pass-through fallback (no hardcoding of any specific field names or mappings)
         fields = []
-        work_candidates = []
-        edu_candidates = []
-        skills_candidates = []
-        other_candidates = []
-        
         for c in field_candidates:
-            raw_name = c.get("suggested_name", "")
-            raw_tok = str(c.get("template_token", "")).lower()
-            raw_lbl = str(c.get("display_label", "")).lower()
-            
-            # Rule A: Exclude candidate_own_cv and system instructions
-            if "candidate_own_cv" in raw_name or "own_cv" in raw_name:
+            name = c.get("suggested_name", "")
+            if "candidate_own_cv" in name or "own_cv" in name:
                 continue
-                
-            n = raw_name.lower().strip()
-            
-            # Rule B: Strip single letter prefixes (like t_, e_)
-            if len(n) > 2 and n[1] == "_" and n[0] in ("t", "e", "c", "v", "p"):
-                n = n[2:]
-                
-            # Rule C: Translate presenter/consultant roles to presenter_ namespace generically
-            if "employee" in n:
-                n = n.replace("employee", "presenter_")
-            elif "consultant" in n:
-                n = n.replace("consultant", "presenter_")
-                
-            n = re.sub(r"_+", "_", n).strip("_")
-            
-            # Rule D: Standardize contact/presenter attributes generically
-            if "presenter" in n:
-                if "telno" in n or "phone" in n or "tel" in n:
-                    n = "presenter_phone"
-                elif "email" in n:
-                    n = "presenter_email"
-                elif "name" in n:
-                    n = "presenter_name"
-                elif "title" in n or "job" in n:
-                    n = "presenter_title"
-                elif "area" in n or "specialist" in n:
-                    n = "presenter_specialist_area"
-                    
-            # Rule E: Map consultant comments / expert opinion to cv_comments generically
-            elif ("consultant" in raw_tok and "comment" in raw_tok) or ("expert" in raw_lbl and "opinion" in raw_lbl):
-                n = "cv_comments"
-                
-            # Rule F: Map skills to key_skills generically
-            elif n == "skills" or "skills" in n:
-                n = "key_skills"
-                
-            mapped_name = re.sub(r"[^a-zA-Z0-9]+", "_", n).strip("_")
-            
-            c_copy = dict(c)
-            c_copy["name"] = mapped_name
-            
-            if mapped_name == "work_experience" or "work_experience" in mapped_name:
-                work_candidates.append(c_copy)
-            elif mapped_name == "education" or "education" in mapped_name:
-                edu_candidates.append(c_copy)
-            elif mapped_name in ("key_skills", "skills"):
-                skills_candidates.append(c_copy)
-            else:
-                other_candidates.append(c_copy)
-                
-        # Group work_experience
-        if work_candidates:
-            sub_fields = []
-            seen_subs = set()
-            block_ids = []
-            for wc in work_candidates:
-                block_ids.extend(wc.get("source_block_ids", []))
-                ph = wc.get("template_evidence", {}).get("placeholder_text") or wc.get("template_token", "")
-                sub_name = re.sub(r"[^a-zA-Z0-9]+", "_", ph.strip("[]\"'")).strip("_").lower()
-                if sub_name.startswith("bullet_point_"):
-                    sub_name = sub_name.replace("bullet_point_", "")
-                if sub_name not in seen_subs:
-                    seen_subs.add(sub_name)
-                    sub_fields.append({
-                        "name": sub_name,
-                        "field_type": wc.get("field_type", "scalar"),
-                        "template_token": ph
-                    })
-            
-            first = work_candidates[0]
-            first_ph = first.get("template_evidence", {}).get("placeholder_text") or first.get("template_token")
-            rc = dict(first.get("render_contract", {}))
-            rc["anchor_token"] = first_ph
             fields.append({
-                "name": "work_experience",
-                "display_label": "Work experience",
-                "field_type": "array_object",
+                "name": name,
+                "display_label": c.get("display_label"),
+                "field_type": c.get("field_type", "scalar"),
                 "source_classification": "recruiter_input",
-                "template_token": first_ph,
-                "source_block_ids": list(dict.fromkeys(block_ids)),
-                "template_evidence": first.get("template_evidence", {}),
-                "render_contract": rc,
-                "sub_fields": sub_fields
+                "template_token": c.get("template_token"),
+                "source_block_ids": c.get("source_block_ids", []),
+                "template_evidence": c.get("template_evidence", {}),
+                "render_contract": c.get("render_contract", {}),
             })
-            
-        # Group education
-        if edu_candidates:
-            sub_fields = []
-            seen_subs = set()
-            block_ids = []
-            for ec in edu_candidates:
-                block_ids.extend(ec.get("source_block_ids", []))
-                ph = ec.get("template_evidence", {}).get("placeholder_text") or ec.get("template_token", "")
-                sub_name = re.sub(r"[^a-zA-Z0-9]+", "_", ph.strip("[]\"'")).strip("_").lower()
-                if sub_name.startswith("bullet_point_"):
-                    sub_name = sub_name.replace("bullet_point_", "")
-                if sub_name not in seen_subs:
-                    seen_subs.add(sub_name)
-                    sub_fields.append({
-                        "name": sub_name,
-                        "field_type": ec.get("field_type", "scalar"),
-                        "template_token": ph
-                    })
-                    
-            first = edu_candidates[0]
-            first_ph = first.get("template_evidence", {}).get("placeholder_text") or first.get("template_token")
-            rc = dict(first.get("render_contract", {}))
-            rc["anchor_token"] = first_ph
-            fields.append({
-                "name": "education",
-                "display_label": "Education",
-                "field_type": "array_object",
-                "source_classification": "recruiter_input",
-                "template_token": first_ph,
-                "source_block_ids": list(dict.fromkeys(block_ids)),
-                "template_evidence": first.get("template_evidence", {}),
-                "render_contract": rc,
-                "sub_fields": sub_fields
-            })
-            
-        # Group key_skills
-        if skills_candidates:
-            block_ids = []
-            for sc in skills_candidates:
-                block_ids.extend(sc.get("source_block_ids", []))
-            first = skills_candidates[0]
-            fields.append({
-                "name": "key_skills",
-                "display_label": "Key skills",
-                "field_type": "array",
-                "source_classification": "recruiter_input",
-                "template_token": first.get("template_token"),
-                "source_block_ids": list(dict.fromkeys(block_ids)),
-                "template_evidence": first.get("template_evidence", {}),
-                "render_contract": first.get("render_contract", {})
-            })
-            
-        # Add other fields
-        for oc in other_candidates:
-            fields.append({
-                "name": oc["name"],
-                "display_label": oc.get("display_label"),
-                "field_type": oc.get("field_type", "scalar"),
-                "source_classification": "recruiter_input",
-                "template_token": oc.get("template_token"),
-                "source_block_ids": oc.get("source_block_ids", []),
-                "template_evidence": oc.get("template_evidence", {}),
-                "render_contract": oc.get("render_contract", {})
-            })
-            
         return {"fields": fields}
 
     def extract_resume_fields(
