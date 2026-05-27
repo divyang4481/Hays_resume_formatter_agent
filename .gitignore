@@ -1,3 +1,17 @@
 /.pytest_cache
 /formatted_resume_output.docx
 /scratch
+__pycache__/
+*.py[cod]
+*.pyc   
+.env
+.venv/
+.mypy_cache/
+.coverage
+local_store/
+docker/
+*.log
+.DS_Store
+.idea/
+.vscode/
+src/worker/core/__pycache__/llm.cpython-311.pyc

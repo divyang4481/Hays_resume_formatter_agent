@@ -98,32 +98,38 @@ def fetch_manifest(template_id: str, host: str) -> dict:
 
 
 def print_manifest(manifest: dict) -> None:
-    """Pretty-print the manifest fields table."""
+    """Pretty-print the manifest fields table with detailed context."""
     fields = manifest.get("fields", [])
-    print(f"\n{'='*70}")
+    print(f"\n{'='*145}")
     print(f"MANIFEST  —  {len(fields)} fields")
     print(f"  template_id : {manifest.get('template_id')}")
     print(f"  manifest_id : {manifest.get('manifest_id')}")
-    print(f"  created_at  : {manifest.get('created_at')}")
-    print(f"{'='*70}")
-    print(f"  {'#':<4} {'name':<35} {'type':<16} {'required'}")
-    print(f"  {'-'*65}")
+    print(f"{'='*145}")
+    print(f"  {'#':<4} {'name':<20} {'type':<10} {'req':<5} {'header':<25} {'inj_type':<15} {'token':<20} {'preview'}")
+    print(f"  {'-'*140}")
     for i, field in enumerate(fields, 1):
-        name = field.get("name", "?")
-        ftype = field.get("field_type", "scalar")
-        required = "YES" if field.get("required") else "no"
-        print(f"  {i:<4} {name:<35} {ftype:<16} {required}")
-        hint = field.get("source_hint", "")
-        if hint:
-            print(f"       source_hint : {hint[:80]}")
-        token = field.get("template_token", "")
-        if token:
-            print(f"       token       : {token}")
-        sub_fields = field.get("sub_fields", [])
-        if sub_fields:
-            for sf in sub_fields:
-                print(f"         sub  > {sf.get('name','?')} ({sf.get('field_type','scalar')}) — {sf.get('template_token','')}")
-    print(f"{'='*70}\n")
+        name = field.get('name', '?')
+        ftype = field.get('field_type', 'scalar')
+        required = 'YES' if field.get('required') else 'no'
+        header = field.get('source_hint', '')
+        inj_details = field.get('injection_details', {})
+        inj_type = inj_details.get('injection_type', 'N/A')
+        token = field.get('template_token', '')
+        # Build a short preview from injection locations if available
+        preview = ''
+        if inj_details:
+            locs = inj_details.get('locations', [])
+            if locs:
+                first = locs[0]
+                preview = first.get('preview') or first.get('paragraph_preview') or ''
+        preview = (preview[:30] + '…') if len(preview) > 30 else preview
+        print(f"  {i:<4} {name:<20} {ftype:<10} {required:<5} {header[:20]:<25} {inj_type:<15} {token:<20} {preview}")
+        for sf in field.get('sub_fields', []):
+            sf_name = sf.get('name', '?')
+            sf_type = sf.get('field_type', 'scalar')
+            sf_token = sf.get('template_token', '')
+            print(f"    - {sf_name} ({sf_type}) token: {sf_token}")
+    print(f"{'='*145}\n")
 
 
 def main() -> None:

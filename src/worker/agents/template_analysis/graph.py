@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import re
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -69,13 +70,16 @@ def _build_injection_details_map(docx_bytes: bytes) -> dict[str, dict[str, Any]]
             for match in re.finditer(r"MERGEFIELD\s+([a-zA-Z0-9_:]+)", xml_content, re.IGNORECASE):
                 mf_name = match.group(1).strip()
                 norm = _normalize_field_name(mf_name)
+                # Capture a short XML preview around the match for context
+                start = match.start()
+                preview = xml_content[max(0, start-80): start+200].replace('\n', ' ')
                 if norm not in details:
                     details[norm] = {
                         "injection_type": "mergefield",
                         "mergefield_name": mf_name,
                         "locations": [],
                     }
-                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file})
+                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file, "preview": preview})
 
             # --- TableStart / TableEnd tokens ---
             for match in re.finditer(r"TableStart:([a-zA-Z0-9_]+)", xml_content, re.IGNORECASE):
@@ -88,10 +92,12 @@ def _build_injection_details_map(docx_bytes: bytes) -> dict[str, dict[str, Any]]
                         "sub_field_tokens": [],
                         "locations": [],
                     }
-                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file})
-
+                # Capture preview snippet around the TableStart token
+                start = match.start()
+                preview = xml_content[max(0, start-80): start+200].replace('\n', ' ')
+                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file, "preview": preview})
                 # Collect sub-field MERGEFIELD names that appear near this TableStart
-                # Look in same xml_file for nearby MERGEFIELDs (within 2000 chars)
+                # Look in same xml_file for nearby MERGEFIELDs (within 3000 chars)
                 start_pos = match.start()
                 nearby = xml_content[start_pos: start_pos + 3000]
                 sub_mf = re.findall(r"MERGEFIELD\s+([a-zA-Z0-9_:]+)", nearby, re.IGNORECASE)
@@ -109,7 +115,10 @@ def _build_injection_details_map(docx_bytes: bytes) -> dict[str, dict[str, Any]]
                         "placeholder_text": f"{{{{{hb_name}}}}}",
                         "locations": [],
                     }
-                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file})
+                # Capture a preview snippet around the handlebars token
+                start = match.start()
+                preview = xml_content[max(0, start-80): start+200].replace('\n', ' ')
+                details[norm]["locations"].append({"context": location_ctx, "xml_file": xml_file, "preview": preview})
 
     # --- Bracket [placeholder] tokens — scan paragraph plain text ---
     try:
@@ -127,7 +136,9 @@ def _build_injection_details_map(docx_bytes: bytes) -> dict[str, dict[str, Any]]
                         "placeholder_text": f"[{raw}]",
                         "locations": [],
                     }
-                loc = {"context": ctx, "paragraph_text_preview": para.text[:80]}
+                # Capture a short preview of the surrounding paragraph text
+                preview = para.text[:200].replace('\n', ' ')
+                loc = {"context": ctx, "paragraph_preview": preview}
                 details[norm]["locations"].append(loc)
 
         for para in doc.paragraphs:
@@ -279,12 +290,36 @@ def _default_fields() -> list[dict[str, Any]]:
 
 def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
     try:
+        # Load the DOCX bytes from the object store
         template_bytes = object_store.get_bytes(state["template_object_key"])
+        # 1️⃣ Extract tokens via existing regex-based scanner (used for LLM inference)
         extracted = _extract_template_tokens(template_bytes)
         template_text = _extract_template_text(template_bytes)
-        # Build injection details map at XML scan time
+        # 2️⃣ Build injection details map (existing logic)
         injection_map = _build_injection_details_map(template_bytes)
         print(f"[InjectionScan] Found {len(injection_map)} injectable tokens: {list(injection_map.keys())}")
+        # 3️⃣ ALSO run the new XML parser to get concrete field definitions
+        from src.worker.agents.template_analysis.xml_parser import extract_fields_from_docx
+        import tempfile, uuid
+        # Write temporary DOCX file for the parser (it expects a Path)
+        tmp_path = Path("SampleData/output/temp_docx_" + str(uuid.uuid4()) + ".docx")
+        tmp_path.write_bytes(template_bytes)
+        xml_fields = extract_fields_from_docx(tmp_path)
+        # Clean up temporary file
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+        # Merge XML‑derived fields into `extracted` list, avoiding duplicates
+        # Convert to dict keyed by normalized name for easy merge
+        norm_to_token = {name: token for name, token in extracted}
+        for field in xml_fields:
+            norm_name = field["name"]
+            # If the field is already present from token extraction, keep the richer LLM token
+            if norm_name not in norm_to_token:
+                norm_to_token[norm_name] = field["token"]
+        # Re‑assemble the extracted list preserving order (XML fields first)
+        extracted = [(field["name"], field["token"]) for field in xml_fields] + list(norm_to_token.items())
     except Exception as e:
         print(f"[InjectionScan] Error: {e}")
         extracted = []

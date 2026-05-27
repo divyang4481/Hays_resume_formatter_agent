@@ -62,6 +62,12 @@ def main():
             )
             print(f"-> Success! Inferred {len(fields)} manifest fields:")
             print(json.dumps(fields, indent=2))
+            # Store manifest to local_store
+            store_dir = Path("local_store")
+            store_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = store_dir / f"{Path(template_name).stem}_manifest.json"
+            manifest_path.write_text(json.dumps(fields, indent=2, ensure_ascii=False))
+            print(f"-> Manifest saved to: {manifest_path}")
         except Exception as e:
             print(f"-> Failed during inference: {e}")
 
