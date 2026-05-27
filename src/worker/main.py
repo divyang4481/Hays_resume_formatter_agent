@@ -100,6 +100,8 @@ def process_resume_format(message: dict) -> None:
 
 def run_worker_loop() -> None:
     print("Worker loop started")
+    print("[TemplateAnalysis] pipeline_version=layout_v2_agentic_qc")
+    print("[TemplateAnalysis] graph_file=src/worker/agents/template_analysis/graph.py")
     while True:
         try:
             # Poll the template analysis queue
