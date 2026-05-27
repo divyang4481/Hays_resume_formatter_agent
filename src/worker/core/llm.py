@@ -91,6 +91,30 @@ class LLMClient:
             raise ValueError("Invalid Bedrock payload: 'fields' is not a list")
         return fields
 
+
+    def plan_manifest_from_evidence(
+        self,
+        *,
+        template_name: str,
+        canonical_blocks: list[dict[str, Any]],
+        field_candidates: list[dict[str, Any]],
+        repeat_groups: list[dict[str, Any]],
+        use_strong_model: bool = True,
+    ) -> dict[str, Any]:
+        fields = []
+        for c in field_candidates:
+            fields.append({
+                "name": c.get("suggested_name"),
+                "display_label": c.get("display_label"),
+                "field_type": c.get("field_type", "scalar"),
+                "source_classification": "recruiter_input",
+                "template_token": c.get("template_token"),
+                "source_block_ids": c.get("source_block_ids", []),
+                "template_evidence": c.get("template_evidence", {}),
+                "render_contract": c.get("render_contract", {}),
+            })
+        return {"fields": fields}
+
     def extract_resume_fields(
         self,
         *,
