@@ -1,15 +1,13 @@
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from typing import List, Dict
+from typing import List, Dict, Any
 
 
 def _clean_field_name(raw: str) -> str:
-    """Strip surrounding wrappers and normalize to snake_case."""
     text = raw.strip().strip('"').strip("'").strip('[').strip(']')
     text = re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
     return text or "unknown_field"
@@ -21,7 +19,6 @@ def _extract_mergefield_name(instr_text: str) -> str | None:
 
 
 def _extract_macro_placeholder(instr_text: str) -> str | None:
-    # Supports both [Type text] and "Use bullets if required"
     br = re.search(r"\[([^\]]+)\]", instr_text)
     if br:
         return br.group(1).strip()
@@ -30,6 +27,25 @@ def _extract_macro_placeholder(instr_text: str) -> str | None:
         return qt.group(1).strip()
     return None
 
+
+def _strip_bracketed(text: str) -> str:
+    return re.sub(r"\[[^\]]+\]", " ", text or "").strip()
+
+
+def _resolve_generic_placeholder_name(raw_placeholder: str, source_hint: str, heading: str) -> str:
+    raw = _clean_field_name(raw_placeholder)
+    label_seed = _strip_bracketed(source_hint)
+
+    # Prefer nearby label text; fallback to heading.
+    candidate = _clean_field_name(label_seed)
+    if not candidate or candidate in {"unknown_field", "type_text", "bullet_point_list"}:
+        candidate = _clean_field_name(heading)
+
+    # If still too generic, keep placeholder-derived name to avoid template-specific hardcoding.
+    if not candidate or candidate in {"unknown_field", "heading", "title"}:
+        candidate = raw
+
+    return candidate
 
 
 def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
@@ -42,8 +58,24 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
     fields: List[Dict] = []
-    counts_by_base_name: dict[str, int] = {}
+    counts_by_name: dict[str, int] = {}
+    placeholder_occurrence: dict[str, int] = {}
+    block_counter = 0
     current_heading = ""
+
+    def next_block(placeholder_text: str, label: str, style: str, is_bullet: bool) -> dict[str, Any]:
+        nonlocal block_counter
+        block_counter += 1
+        placeholder_occurrence[placeholder_text] = placeholder_occurrence.get(placeholder_text, 0) + 1
+        return {
+            "block_id": f"b{block_counter:03d}",
+            "section_heading": current_heading,
+            "label_text": label,
+            "placeholder_text": placeholder_text,
+            "occurrence_index": placeholder_occurrence[placeholder_text],
+            "block_type": "bullet_placeholder" if is_bullet else "label_value_row",
+            "location": {"style": style, "is_bullet": is_bullet},
+        }
 
     for p in root.findall('.//w:p', ns):
         texts = [(t.text or "") for t in p.findall('.//w:t', ns)]
@@ -55,73 +87,51 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
         if paragraph_text and ("heading" in style_val or "title" in style_val or paragraph_text.isupper()):
             current_heading = paragraph_text
 
-
-        # Gather likely labels from current paragraph text
         source_hint = paragraph_text or current_heading
 
-        # fldSimple MERGEFIELD
         for fld in p.findall('.//w:fldSimple', ns):
             instr_text = fld.attrib.get(f"{{{ns['w']}}}instr", "")
             mf = _extract_mergefield_name(instr_text)
             if not mf:
                 continue
             base_name = _clean_field_name(mf)
-            fields.append({
-                "name": base_name,
-                "type": "scalar",
-                "required": True,
-                "source_hint": source_hint,
-                "token": f"MERGEFIELD {mf}",
-                "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
-            })
+            block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet)
+            fields.append({"name": base_name, "type": "scalar", "required": True, "source_hint": source_hint,
+                          "token": f"MERGEFIELD {mf}", "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
+                          "source_block_ids": [block["block_id"]], "template_evidence": block})
 
-        # instrText MERGEFIELD / MACROBUTTON
         for instr in p.findall('.//w:instrText', ns):
             instr_text = (instr.text or "").strip()
             if not instr_text:
                 continue
+
             mf = _extract_mergefield_name(instr_text)
             if mf:
                 base_name = _clean_field_name(mf)
-                fields.append({
-                    "name": base_name,
-                    "type": "scalar",
-                    "required": True,
-                    "source_hint": source_hint,
-                    "token": f"MERGEFIELD {mf}",
-                    "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
-                })
+                block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet)
+                fields.append({"name": base_name, "type": "scalar", "required": True, "source_hint": source_hint,
+                              "token": f"MERGEFIELD {mf}", "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
+                              "source_block_ids": [block["block_id"]], "template_evidence": block})
                 continue
 
-            if "MACROBUTTON" in instr_text.upper():
-                raw_placeholder = _extract_macro_placeholder(instr_text)
-                if not raw_placeholder:
-                    continue
-                base_name = _clean_field_name(raw_placeholder)
+            if "MACROBUTTON" not in instr_text.upper():
+                continue
+            raw_placeholder = _extract_macro_placeholder(instr_text)
+            if not raw_placeholder:
+                continue
 
-                # Disambiguate generic placeholders by semantic context
-                if base_name in {"type_text", "type_text_"}:
-                    context_seed = source_hint or current_heading or "field"
-                    base_name = _clean_field_name(context_seed)
+            base_name = _clean_field_name(raw_placeholder)
+            if base_name in {"type_text", "type_text_", "bullet_point_list"}:
+                base_name = _resolve_generic_placeholder_name(raw_placeholder, source_hint, current_heading)
 
-                if is_bullet:
-                    token_name = f"{base_name}_item"
-                else:
-                    token_name = base_name
-
-                counts_by_base_name[token_name] = counts_by_base_name.get(token_name, 0) + 1
-                occurrence = counts_by_base_name[token_name]
-                final_name = token_name if occurrence == 1 else f"{token_name}_{occurrence}"
-
-                inferred_type = "array" if is_bullet else "scalar"
-                fields.append({
-                    "name": final_name,
-                    "type": inferred_type,
-                    "required": True,
-                    "source_hint": source_hint,
-                    "token": instr_text,
-                    "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
-                })
+            token_name = f"{base_name}_item" if is_bullet else base_name
+            counts_by_name[token_name] = counts_by_name.get(token_name, 0) + 1
+            final_name = token_name if counts_by_name[token_name] == 1 else f"{token_name}_{counts_by_name[token_name]}"
+            block = next_block(f"[{raw_placeholder}]", source_hint, style_val, is_bullet)
+            fields.append({"name": final_name, "type": "array" if is_bullet else "scalar", "required": True,
+                          "source_hint": source_hint, "token": instr_text,
+                          "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
+                          "source_block_ids": [block["block_id"]], "template_evidence": block})
 
     return fields
 

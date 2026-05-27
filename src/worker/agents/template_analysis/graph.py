@@ -236,13 +236,15 @@ def _extract_template_tokens(docx_bytes: bytes) -> list[tuple[str, str]]:
     except Exception as e:
         print(f"Error scanning document text: {e}")
 
-    dedup: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    output: list[tuple[str, str]] = []
     for name, original in tokens:
         key = _normalize_field_name(name)
-        if key not in dedup:
-            dedup[key] = original
+        counts[key] = counts.get(key, 0) + 1
+        out_name = key if counts[key] == 1 else f"{key}_{counts[key]}"
+        output.append((out_name, original))
 
-    return [(field_name, token_value) for field_name, token_value in dedup.items()]
+    return output
 
 
 def _extract_template_text(docx_bytes: bytes) -> str:
@@ -338,6 +340,8 @@ def _xml_field_to_manifest_field(xml_field: dict[str, Any], injection_map: dict[
         "extraction_contract": {"llm_output_key": field_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": hint},
         "render_contract": {"render_strategy": "mergefield_replace" if token.upper().startswith("MERGEFIELD ") else "placeholder_replace", "anchor_token": token, "formatting": {}, "empty_value_policy": "remove_placeholder"},
         "validation_contract": {"required": True, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"},
+        "source_block_ids": xml_field.get("source_block_ids") or [f"xml_{field_name}"],
+        "template_evidence": xml_field.get("template_evidence") or {"template_token": token, "source_hint": hint},
     }
 
 
@@ -445,6 +449,8 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
             entry["extraction_contract"] = field.get("extraction_contract", {"llm_output_key": field_name, "value_shape": entry["field_type"], "evidence_required": True, "mapping_hint": entry["source_hint"]})
             entry["render_contract"] = field.get("render_contract", {"render_strategy": "mergefield_replace" if inj.get("injection_type") == "mergefield" else "placeholder_replace", "anchor_token": fallback_token, "formatting": {}, "empty_value_policy": "remove_placeholder"})
             entry["validation_contract"] = field.get("validation_contract", {"required": entry["required"], "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"})
+            entry["source_block_ids"] = field.get("source_block_ids") or [f"legacy_{field_name}"]
+            entry["template_evidence"] = field.get("template_evidence") or {"template_token": fallback_token, "source_hint": entry["source_hint"]}
 
             # Preserve sub_fields for array_object types
             sub_fields = field.get("sub_fields")
@@ -505,6 +511,8 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
                 "extraction_contract": {"llm_output_key": normalized_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": source_hint},
                 "render_contract": {"render_strategy": "mergefield_replace" if inj.get("injection_type") == "mergefield" else "placeholder_replace", "anchor_token": original_token, "formatting": {}, "empty_value_policy": "remove_placeholder"},
                 "validation_contract": {"required": required, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"},
+                "source_block_ids": [f"fallback_{normalized_name}"],
+                "template_evidence": {"template_token": original_token, "source_hint": source_hint},
             }
         )
 
