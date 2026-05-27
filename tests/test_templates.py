@@ -8,6 +8,8 @@ import pytest
 from src.worker.agents.template_analysis.graph import (
     _extract_template_tokens,
     _extract_template_text,
+    _field_has_evidence,
+    _inject_required_hays_fields,
     run_template_analysis
 )
 
@@ -114,3 +116,45 @@ def test_generate_field_manifest_live():
             assert "template_token" in field
     except Exception as e:
         pytest.fail(f"Live Bedrock template analysis failed: {e}")
+
+
+def test_hays_field_postprocessing_drops_hallucination_and_adds_required_fields():
+    template_text = """
+    Current salary & benefits [Type text]
+    Salary required [Type text]
+    Notice period <<NoticePeriod>>
+    Professional qualifications [Type text]
+    Skills [Type text]
+    Current position Use bullets if required
+    INTERESTS AND ACTIVITIES [Bullet point list]
+    """
+    token_values = {"[Type text]", "MERGEFIELD NoticePeriod", "[Bullet point list]"}
+    fields = [
+        {
+            "name": "candidate_own_cv",
+            "template_token": "[Candidate's own CV]",
+            "injection_details": {"placeholder_text": "[Candidate's own CV]"},
+        },
+        {
+            "name": "key_skills",
+            "template_token": "[Type text]",
+            "injection_details": {"placeholder_text": "[Type text]"},
+        },
+    ]
+
+    filtered = [f for f in fields if _field_has_evidence(f, template_text.lower(), token_values)]
+    filtered = [
+        f for f in filtered
+        if f.get("name") != "candidate_own_cv"
+        or "candidate's own cv" in template_text.lower()
+    ]
+    final_fields = _inject_required_hays_fields(filtered, template_text)
+    names = {f["name"] for f in final_fields}
+
+    assert "candidate_own_cv" not in names
+    assert "current_salary_benefits" in names
+    assert "salary_required" in names
+    assert "notice_period" in names
+    assert "professional_qualifications" in names
+    assert "current_position" in names
+    assert "interests_and_activities" in names
