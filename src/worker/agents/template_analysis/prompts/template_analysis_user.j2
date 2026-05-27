@@ -1,0 +1,31 @@
+Template name: {{ template_name }}
+
+Layout Plan (from Visual Planning Expert):
+{{ layout_plan }}
+
+Detected tokens (normalized+raw):
+{{ tokens_json }}
+
+Template text preview:
+{{ template_text_preview }}
+
+Return strict JSON only with this structure:
+{
+  "fields": [
+    {
+      "name": "...",
+      "field_type": "scalar|array|array_object|copy_paste_block",
+      "source_classification": "resume_fact|generated|input_only",
+      "source_hint": "...",
+      "template_token": "...",
+      "required": true,
+      "formatting_hint": "...",
+      "sub_fields": []
+    }
+  ]
+}
+
+source_classification rules:
+- "resume_fact"  : Extract directly from candidate resume (name, skills, work history, education, location, qualifications)
+- "generated"    : LLM writes professional prose based on the resume (cv_comments, expert_opinion, candidate_profile)
+- "input_only"   : Recruiter-supplied only, never in a resume (candidate_id, notice_period, expected_salary, presenter_name/email/phone/title/specialist_area, position_required)

@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Core infrastructure for HayAgent platform containing S3 bucket, SQS queues, and RDS PostgreSQL database, integrated with existing VPC network.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hay-agent
+    Description: Name of the project used for naming resources.
+  Environment:
+    Type: String
+    Default: dev
+    Description: Environment stage (e.g. dev, staging, prod).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-77ca851f
+    Description: Existing VPC ID where the RDS DB instance and Security Group will be deployed.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-0fbd1d43,subnet-4c26e037
+    Description: At least two Subnet IDs in different Availability Zones to be used for the RDS DB Subnet Group.
+  DBUsername:
+    Type: String
+    Default: dbadmin
+    MinLength: 1
+    MaxLength: 63
+    Description: Master username for the RDS PostgreSQL instance.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    Description: Master user password for the RDS PostgreSQL instance.
+  DBName:
+    Type: String
+    Default: HayAgent
+    Description: Name of the database to be created. Will be normalized to lowercase in PG if camelCase.
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: RDS instance class for database.
+  AllowedIngressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: IP CIDR range allowed to connect to PostgreSQL (5432).
+
+Resources:
+  # S3 Bucket for Templates and Processed Resumes
+  HayAgentStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${ProjectName}-storage-${Environment}-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SQS Queue & Dead Letter Queue
+  HayAgentDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-queue-${Environment}-dlq
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  HayAgentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${ProjectName}-queue-${Environment}
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt HayAgentDLQ.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS Database Network & Security configuration using existing VPC/Subnets
+  HayAgentDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnets for ${ProjectName} RDS PostgreSQL instance
+      SubnetIds: !Ref SubnetIds
+
+  HayAgentDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub Security group allowing access to RDS Postgres for ${ProjectName}
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref AllowedIngressCidr
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-db-sg-${Environment}
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS DB Instance
+  HayAgentDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-db-${Environment}
+      Engine: postgres
+      EngineVersion: '16'
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      PubliclyAccessible: true
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !GetAtt HayAgentDBSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref HayAgentDBSubnetGroup
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName
+    Description: CloudFormation Stack Name
+  S3BucketName:
+    Value: !Ref HayAgentStorageBucket
+    Description: Name of S3 bucket for resume and template storage
+  TemplatesFolderPrefix:
+    Value: templates/
+    Description: S3 Key prefix for CV/resume template files
+  ProcessedFolderPrefix:
+    Value: processed/
+    Description: S3 Key prefix for processed output resumes
+  SQSQueueUrl:
+    Value: !Ref HayAgentQueue
+    Description: URL of the main processing SQS Queue
+  SQSQueueArn:
+    Value: !GetAtt HayAgentQueue.Arn
+    Description: ARN of the main processing SQS Queue
+  DBEndpointAddress:
+    Value: !GetAtt HayAgentDBInstance.Endpoint.Address
+    Description: RDS PostgreSQL Endpoint Address
+  DBPort:
+    Value: !GetAtt HayAgentDBInstance.Endpoint.Port
+    Description: RDS PostgreSQL Port
+  DBName:
+    Value: !Ref DBName
+    Description: Name of the active database

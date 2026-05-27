@@ -1,0 +1,11 @@
+[
+  { "ParameterKey": "ProjectName", "ParameterValue": "hay-agent" },
+  { "ParameterKey": "Environment", "ParameterValue": "dev" },
+  { "ParameterKey": "VpcId", "ParameterValue": "vpc-77ca851f" },
+  { "ParameterKey": "SubnetIds", "ParameterValue": "subnet-0fbd1d43,subnet-4c26e037" },
+  { "ParameterKey": "DBUsername", "ParameterValue": "dbadmin" },
+  { "ParameterKey": "DBPassword", "ParameterValue": "YourSecureDBPassword123!" },
+  { "ParameterKey": "DBName", "ParameterValue": "HayAgent" },
+  { "ParameterKey": "DBInstanceClass", "ParameterValue": "db.t4g.micro" },
+  { "ParameterKey": "AllowedIngressCidr", "ParameterValue": "0.0.0.0/0" }
+]

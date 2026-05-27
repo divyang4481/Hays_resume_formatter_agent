@@ -1,0 +1,21 @@
+Template name: {{ template_name }}
+
+Detected tokens (normalized+raw):
+{{ tokens_json }}
+
+Template text preview:
+{{ template_text_preview }}
+
+Return strict JSON only with this structure:
+{
+  "fields": [
+    {
+      "name": "...",
+      "field_type": "scalar|array|array_object",
+      "source_hint": "...",
+      "template_token": "...",
+      "required": true,
+      "formatting_hint": "..."
+    }
+  ]
+}
