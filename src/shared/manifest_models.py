@@ -37,6 +37,7 @@ class RenderContract(BaseModel):
     formatting: dict[str, Any] = Field(default_factory=dict)
     block_tokens: dict[str, str] = Field(default_factory=dict)
     empty_value_policy: str = "remove_placeholder"
+    occurrence_selector: dict[str, Any] = Field(default_factory=dict)
 
 
 class ValidationContract(BaseModel):
@@ -53,6 +54,7 @@ class SubFieldContract(BaseModel):
 
 class TemplateFieldV2(BaseModel):
     name: str
+    display_label: str = ""
     field_type: FieldType
     required: bool = False
     source_classification: SourceClassification = "resume_fact"
@@ -65,6 +67,9 @@ class TemplateFieldV2(BaseModel):
     template_token: str = ""
     formatting_hint: str = ""
     injection_details: dict[str, Any] = Field(default_factory=dict)
+    source_block_ids: list[str] = Field(default_factory=list)
+    template_evidence: dict[str, Any] = Field(default_factory=dict)
+    occurrence_selector: dict[str, Any] = Field(default_factory=dict)
 
 
 class TemplateManifestV2(BaseModel):
@@ -73,6 +78,7 @@ class TemplateManifestV2(BaseModel):
     template_id: str | None = None
     manifest_id: str | None = None
     fields: list[TemplateFieldV2] = Field(default_factory=list)
+    layout: dict[str, Any] = Field(default_factory=dict)
 
 
 class FieldMappingEvidence(BaseModel):
@@ -97,7 +103,7 @@ class FilledTemplatePayload(BaseModel):
     template_id: str | None = None
     manifest_id: str | None = None
     render_values: dict[str, Any] = Field(default_factory=dict)
-    placeholder_values: dict[str, Any] = Field(default_factory=dict)
+    placeholder_values: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
     repeat_blocks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     missing_fields_requiring_recruiter_or_ats_input: list[str] = Field(default_factory=list)
 
