@@ -63,13 +63,9 @@ Strict Rules for Layout Planning and Field Grouping:
        - `grades` (template_token: `[Bullet point grades]`, field_type: `array`, source_hint: "Bullet points listing grades or accomplishments")
      - Set `layout_details` to `{"section": "Education", "block_layout": "repeated_block"}`.
 
-7. **Explicit Candidate Details & Presenter Info**:
-    - `CandidateID` -> `candidate_id`
-    - `CandidateFullName` -> `candidate_name`
-    - `NoticePeriod` -> `notice_period`
-    - `CandidateTown` -> `candidate_location` (or `candidate_town`)
-    - `ExpectedSalary` -> `expected_salary`
-    - `Position Required` -> `position_required` (with source_hint: "Position for which the candidate is considered or applied")
-    - Header/Footer Presenter details: `EmployeeName` -> `presenter_name`, `EmployeeJobTitle` -> `presenter_title`, `EmployeeSpecialistArea` -> `presenter_specialist_area`, `EmployeeTelNo` -> `presenter_phone`, `EmployeeEmail` -> `presenter_email`.
+7. **Explicit Candidate Details & Presenter Info (No hardcoded field catalog)**:
+    - Detect recruiter-input and presenter/contact placeholders directly from tokens/layout evidence (especially header/footer merge fields).
+    - Normalize names generically into snake_case based on token semantics (e.g., notice period, expected salary, candidate location, presenter phone/email/title).
+    - Do not depend on a fixed, hardcoded token-to-name list; infer mappings from token text and surrounding section labels while preserving exact `template_token` evidence.
 
 8. Ensure all extracted field names are completely normalized, clean snake_case, language-neutral, and perfectly capture the layout intent. No markdown blocks outside of the raw JSON code block, and NO placeholder field names like "type_text_1" or duplicate scalar entries for table fields! Always include the detailed `sub_fields` arrays and `layout_details` objects in your final output!
