@@ -294,6 +294,10 @@ def _field_has_evidence(field: dict[str, Any], template_text_lower: str, token_v
         return True
     if token and token.lower() in template_text_lower:
         return True
+    if token and "macrobutton" in token.lower():
+        macro_match = re.search(r"\[([^\]]+)\]", token)
+        if macro_match and f"[{macro_match.group(1).strip()}]".lower() in template_text_lower:
+            return True
     inj = field.get("injection_details") or {}
     if isinstance(inj, dict):
         placeholder = str(inj.get("placeholder_text") or "").strip()
@@ -306,6 +310,35 @@ def _field_has_evidence(field: dict[str, Any], template_text_lower: str, token_v
         ):
             return True
     return False
+
+
+def _xml_field_to_manifest_field(xml_field: dict[str, Any], injection_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    field_name = _normalize_field_name(str(xml_field.get("name") or ""))
+    token = str(xml_field.get("token") or f"[{field_name}]")
+    field_type = "array" if str(xml_field.get("type") or "scalar") == "array" else "scalar"
+    hint = str(xml_field.get("source_hint") or field_name.replace("_", " "))
+    inj = injection_map.get(field_name)
+    if not inj:
+        inj = {
+            "injection_type": "mergefield" if token.upper().startswith("MERGEFIELD ") else "text_placeholder",
+            "mergefield_name": token[len("MERGEFIELD "):].strip() if token.upper().startswith("MERGEFIELD ") else None,
+            "placeholder_text": token if token.startswith("[") else None,
+            "locations": [],
+        }
+    return {
+        "name": field_name,
+        "field_type": field_type,
+        "source_classification": "resume_fact",
+        "source_hint": hint,
+        "template_token": token,
+        "required": True,
+        "formatting_hint": "bullet_list" if field_type == "array" else "plain_text",
+        "injection_details": inj,
+        "semantic_contract": {"business_meaning": "", "resume_search_intent": "", "acceptable_sources": [], "do_not_infer": []},
+        "extraction_contract": {"llm_output_key": field_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": hint},
+        "render_contract": {"render_strategy": "mergefield_replace" if token.upper().startswith("MERGEFIELD ") else "placeholder_replace", "anchor_token": token, "formatting": {}, "empty_value_policy": "remove_placeholder"},
+        "validation_contract": {"required": True, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"},
+    }
 
 
 def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
@@ -429,6 +462,19 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
             or any(phrase in template_text_lower for phrase in ["candidate's own cv", "candidate cv", "paste the candidate's own cv", "original cv"])
         ]
         normalized_fields = [f for f in normalized_fields if _field_has_evidence(f, template_text_lower, token_values)]
+
+        # Ensure deterministic XML-discovered placeholders are not dropped when LLM under-captures.
+        existing_names = {f.get("name") for f in normalized_fields}
+        for xf in xml_fields:
+            xf_name = _normalize_field_name(str(xf.get("name") or ""))
+            if not xf_name or xf_name in existing_names:
+                continue
+            if xf_name in {"type_text", "type_text_item", "unknown_field"}:
+                continue
+            candidate = _xml_field_to_manifest_field(xf, injection_map)
+            if _field_has_evidence(candidate, template_text_lower, token_values):
+                normalized_fields.append(candidate)
+                existing_names.add(xf_name)
 
         if normalized_fields:
             state["fields"] = normalized_fields

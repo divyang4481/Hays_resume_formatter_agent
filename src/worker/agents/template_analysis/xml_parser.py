@@ -31,6 +31,7 @@ def _extract_macro_placeholder(instr_text: str) -> str | None:
     return None
 
 
+
 def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
     if not docx_path.is_file():
         raise FileNotFoundError(f"DOCX not found: {docx_path}")
