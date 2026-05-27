@@ -288,6 +288,65 @@ def _default_fields() -> list[dict[str, Any]]:
     return []
 
 
+def _field_has_evidence(field: dict[str, Any], template_text_lower: str, token_values: set[str]) -> bool:
+    token = str(field.get("template_token") or "").strip()
+    if token and token in token_values:
+        return True
+    if token and token.lower() in template_text_lower:
+        return True
+    inj = field.get("injection_details") or {}
+    if isinstance(inj, dict):
+        placeholder = str(inj.get("placeholder_text") or "").strip()
+        if placeholder and (placeholder in token_values or placeholder.lower() in template_text_lower):
+            return True
+        mergefield_name = str(inj.get("mergefield_name") or "").strip()
+        if mergefield_name and (
+            f"mergefield {mergefield_name}".lower() in template_text_lower
+            or f"<<{mergefield_name}>>".lower() in template_text_lower
+        ):
+            return True
+    return False
+
+
+def _inject_required_hays_fields(fields: list[dict[str, Any]], template_text: str) -> list[dict[str, Any]]:
+    text = template_text.lower()
+    by_name = {f.get("name"): f for f in fields if f.get("name")}
+
+    def upsert(name: str, template_token: str, source_hint: str, field_type: str, source_classification: str, formatting_hint: str = "plain_text"):
+        if name in by_name:
+            return
+        by_name[name] = {
+            "name": name,
+            "field_type": field_type,
+            "source_classification": source_classification,
+            "source_hint": source_hint,
+            "template_token": template_token,
+            "required": True,
+            "formatting_hint": formatting_hint,
+            "injection_details": {
+                "injection_type": "mergefield" if template_token.upper().startswith("MERGEFIELD") else "text_placeholder",
+                "mergefield_name": template_token.replace("MERGEFIELD", "").strip() if template_token.upper().startswith("MERGEFIELD") else None,
+                "placeholder_text": template_token if template_token.startswith("[") or template_token.startswith('"') else None,
+                "locations": [],
+            },
+        }
+
+    if "current salary & benefits" in text:
+        upsert("current_salary_benefits", "[Type text]", "Current salary & benefits", "scalar", "input_only")
+    if "salary required" in text:
+        upsert("salary_required", "[Type text]", "Salary required", "scalar", "input_only")
+    if "notice period" in text:
+        upsert("notice_period", "MERGEFIELD NoticePeriod", "Notice period", "scalar", "input_only")
+    if "professional qualifications" in text:
+        upsert("professional_qualifications", "[Type text]", "Professional qualifications", "array", "resume_fact", "bullet_list")
+    if "current position" in text:
+        upsert("current_position", '"Use bullets if required"', "Current position", "array", "resume_fact", "bullet_list")
+    if "interests and activities" in text:
+        upsert("interests_and_activities", "[Bullet point list]", "INTERESTS AND ACTIVITIES", "array", "resume_fact", "bullet_list")
+
+    return list(by_name.values())
+
+
 def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
     try:
         # Load the DOCX bytes from the object store
@@ -300,16 +359,18 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
         print(f"[InjectionScan] Found {len(injection_map)} injectable tokens: {list(injection_map.keys())}")
         # 3️⃣ ALSO run the new XML parser to get concrete field definitions
         from src.worker.agents.template_analysis.xml_parser import extract_fields_from_docx
-        import tempfile, uuid
-        # Write temporary DOCX file for the parser (it expects a Path)
-        tmp_path = Path("SampleData/output/temp_docx_" + str(uuid.uuid4()) + ".docx")
-        tmp_path.write_bytes(template_bytes)
-        xml_fields = extract_fields_from_docx(tmp_path)
-        # Clean up temporary file
+        import tempfile
+        # Write transient DOCX bytes to a system temp file for parser path compatibility
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_file:
+            tmp_file.write(template_bytes)
+            tmp_path = Path(tmp_file.name)
         try:
-            tmp_path.unlink()
-        except Exception:
-            pass
+            xml_fields = extract_fields_from_docx(tmp_path)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         # Merge XML‑derived fields into `extracted` list, avoiding duplicates
         # Convert to dict keyed by normalized name for easy merge
         norm_to_token = {name: token for name, token in extracted}
@@ -387,9 +448,9 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
 
             entry["injection_details"] = inj
             entry["semantic_contract"] = field.get("semantic_contract", {"business_meaning": "", "resume_search_intent": "", "acceptable_sources": [], "do_not_infer": []})
-            entry["extraction_contract"] = field.get("extraction_contract", {"llm_output_key": field_name, "value_shape": field_type, "evidence_required": True, "mapping_hint": source_hint})
+            entry["extraction_contract"] = field.get("extraction_contract", {"llm_output_key": field_name, "value_shape": entry["field_type"], "evidence_required": True, "mapping_hint": entry["source_hint"]})
             entry["render_contract"] = field.get("render_contract", {"render_strategy": "mergefield_replace" if inj.get("injection_type") == "mergefield" else "placeholder_replace", "anchor_token": fallback_token, "formatting": {}, "empty_value_policy": "remove_placeholder"})
-            entry["validation_contract"] = field.get("validation_contract", {"required": required, "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"})
+            entry["validation_contract"] = field.get("validation_contract", {"required": entry["required"], "min_confidence": 0.65, "missing_policy": "mark_missing_do_not_generate_fake_data"})
 
             # Preserve sub_fields for array_object types
             sub_fields = field.get("sub_fields")
@@ -397,6 +458,17 @@ def _infer_fields(state: TemplateAnalysisState) -> TemplateAnalysisState:
                 entry["sub_fields"] = sub_fields
 
             normalized_fields.append(entry)
+
+        token_values = {t.get("template_token") for t in llm_tokens if t.get("template_token")}
+        template_text_lower = template_text.lower()
+        normalized_fields = [
+            f
+            for f in normalized_fields
+            if f.get("name") != "candidate_own_cv"
+            or any(phrase in template_text_lower for phrase in ["candidate's own cv", "candidate cv", "paste the candidate's own cv", "original cv"])
+        ]
+        normalized_fields = [f for f in normalized_fields if _field_has_evidence(f, template_text_lower, token_values)]
+        normalized_fields = _inject_required_hays_fields(normalized_fields, template_text)
 
         if normalized_fields:
             state["fields"] = normalized_fields
