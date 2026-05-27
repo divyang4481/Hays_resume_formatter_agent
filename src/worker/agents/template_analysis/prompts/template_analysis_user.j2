@@ -1,31 +1,36 @@
 Template name: {{ template_name }}
 
-Layout Plan (from Visual Planning Expert):
-{{ layout_plan }}
-
-Detected tokens (normalized+raw):
-{{ tokens_json }}
-
-Template text preview:
+Layout blocks context:
 {{ template_text_preview }}
 
-Return strict JSON only with this structure:
+Token list:
+{{ tokens_json }}
+
+Return:
 {
   "fields": [
     {
       "name": "...",
+      "display_label": "...",
       "field_type": "scalar|array|array_object|copy_paste_block",
-      "source_classification": "resume_fact|generated|input_only",
-      "source_hint": "...",
+      "source_classification": "resume_fact|generated|input_only|recruiter_input|ats_input",
       "template_token": "...",
-      "required": true,
-      "formatting_hint": "...",
-      "sub_fields": []
+      "source_block_ids": ["b001"],
+      "template_evidence": {
+        "section_heading": "...",
+        "label_text": "...",
+        "placeholder_text": "...",
+        "evidence_text": "..."
+      },
+      "render_contract": {
+        "render_strategy": "mergefield_replace|placeholder_replace|bullet_list_replace|repeat_block|copy_paste_block",
+        "anchor_token": "...",
+        "occurrence_selector": {
+          "source_block_id": "b001",
+          "occurrence_index": 1,
+          "label_text": "..."
+        }
+      }
     }
   ]
 }
-
-source_classification rules:
-- "resume_fact"  : Extract directly from candidate resume (name, skills, work history, education, location, qualifications)
-- "generated"    : LLM writes professional prose based on the resume (cv_comments, expert_opinion, candidate_profile)
-- "input_only"   : Recruiter-supplied or staffing-context values that are not extracted from the candidate resume (IDs, salary/availability inputs, presenter/contact metadata, role requirement fields)

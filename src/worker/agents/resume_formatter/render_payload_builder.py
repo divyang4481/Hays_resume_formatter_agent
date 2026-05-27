@@ -17,6 +17,7 @@ def build_filled_template_payload(
         template_id=manifest.get("template_id"),
         manifest_id=manifest.get("manifest_id"),
     )
+    placeholder_items: list[dict[str, Any]] = []
 
     fields = manifest.get("fields", [])
     mappings = mapping_result.get("field_mappings", {})
@@ -48,10 +49,16 @@ def build_filled_template_payload(
         if render_strategy == "mergefield_replace":
             payload.render_values[token] = mapped_value
         elif render_strategy in ("placeholder_replace", "bullet_list_replace", "copy_paste_block"):
-            payload.placeholder_values[token] = mapped_value
+            placeholder_items.append({
+                "token": token,
+                "value": mapped_value,
+                "source_block_id": (field.get("source_block_ids") or [None])[0],
+                "occurrence_selector": field.get("render_contract", {}).get("occurrence_selector") or field.get("occurrence_selector") or {},
+            })
         elif render_strategy == "repeat_block":
             payload.repeat_blocks[name] = mapped_value or []
         else:
-            payload.placeholder_values[token] = mapped_value
+            placeholder_items.append({"token": token, "value": mapped_value})
 
+    payload.placeholder_values = placeholder_items
     return payload.model_dump()
