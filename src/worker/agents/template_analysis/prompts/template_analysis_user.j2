@@ -28,4 +28,4 @@ Return strict JSON only with this structure:
 source_classification rules:
 - "resume_fact"  : Extract directly from candidate resume (name, skills, work history, education, location, qualifications)
 - "generated"    : LLM writes professional prose based on the resume (cv_comments, expert_opinion, candidate_profile)
-- "input_only"   : Recruiter-supplied only, never in a resume (candidate_id, notice_period, expected_salary, presenter_name/email/phone/title/specialist_area, position_required)
+- "input_only"   : Recruiter-supplied or staffing-context values that are not extracted from the candidate resume (IDs, salary/availability inputs, presenter/contact metadata, role requirement fields)
