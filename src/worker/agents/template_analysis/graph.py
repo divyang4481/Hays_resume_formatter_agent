@@ -9,7 +9,6 @@ from langgraph.graph import END, StateGraph
 
 from src.shared.models import GraphResult, JobStatus
 from src.shared.storage import object_store
-from src.worker.agentic_core import AgenticCore
 from src.worker.agents.template_analysis.extractors import (
     extract_docling_layout_evidence,
     extract_openxml_evidence,
@@ -20,9 +19,8 @@ from src.worker.agents.template_analysis.extractors import (
 from src.worker.agents.template_analysis.field_candidate_builder import (
     build_field_candidates_from_evidence,
 )
-from src.worker.agents.template_analysis.manifest_critic import (
-    critique_manifest_against_evidence,
-)
+from src.worker.agents.template_analysis.manifest_critic import critique_manifest
+from src.worker.agents.template_analysis.logical_field_grouper import group_logical_fields_from_candidates
 from src.worker.agents.template_analysis.manifest_validator import (
     validate_manifest_fields_against_layout,
 )
@@ -31,14 +29,6 @@ from src.worker.agents.template_analysis.manifest_validator import (
 logger = logging.getLogger(__name__)
 TEMPLATE_ANALYSIS_PIPELINE_VERSION = "layout_v2_agentic_qc_2026_05_28"
 PIPELINE_VERSION = TEMPLATE_ANALYSIS_PIPELINE_VERSION
-
-
-from src.worker.agents.template_analysis.utils import (
-    _extract_template_tokens,
-    _extract_template_text,
-    _field_has_evidence,
-    _build_grouped_section_fields,
-)
 
 
 class TemplateAnalysisState(TypedDict):
@@ -50,6 +40,8 @@ class TemplateAnalysisState(TypedDict):
     layout: dict[str, Any]
     field_candidates: list[dict[str, Any]]
     fields: list[dict[str, Any]]
+    grouped_fields: list[dict[str, Any]]
+    critic: dict[str, Any]
 
 
 def _load_template_bytes(state: TemplateAnalysisState) -> TemplateAnalysisState:
@@ -81,40 +73,23 @@ def _build_candidates(state: TemplateAnalysisState) -> TemplateAnalysisState:
     return state
 
 
-def _plan_and_validate(state: TemplateAnalysisState) -> TemplateAnalysisState:
-    agentic = AgenticCore()
-    planned = agentic.plan_manifest_from_evidence(
-        template_name=state["template_name"],
-        canonical_blocks=state["layout"].get("canonical_blocks", []),
-        field_candidates=state.get("field_candidates", []),
-        repeat_groups=state["layout"].get("repeat_groups", []),
-    )
-    planned_fields = planned.get("fields", [])
+def _group_validate_and_critic(state: TemplateAnalysisState) -> TemplateAnalysisState:
+    raw = state.get("field_candidates", [])
+    grouped = group_logical_fields_from_candidates(raw, state.get("layout", {}))
     validated = validate_manifest_fields_against_layout(
-        planned_fields, {"blocks": state["layout"].get("canonical_blocks", [])}
+        grouped, {"blocks": state["layout"].get("canonical_blocks", [])}
     )
-    critique = critique_manifest_against_evidence(
-        {"fields": validated}, state["layout"]
-    )
-    if not critique["passed"]:
-        validated = validate_manifest_fields_against_layout(
-            validated, {"blocks": state["layout"].get("canonical_blocks", [])}
-        )
+    critic = critique_manifest({"fields": validated})
+    duplicate_count = len(validated) - len({f.get("name") for f in validated})
+    repeat_groups_count = len([f for f in validated if f.get("field_type") == "array_object"])
+    logger.info("[TemplateAnalysis] raw_candidates_count=%s", len(raw))
+    logger.info("[TemplateAnalysis] grouped_fields_count=%s", len(grouped))
+    logger.info("[TemplateAnalysis] duplicate_field_names=%s", max(0, duplicate_count))
+    logger.info("[TemplateAnalysis] repeat_groups_count=%s", repeat_groups_count)
+    logger.info("[TemplateAnalysis] critic_score=%s", critic.get("score"))
+    state["grouped_fields"] = grouped
     state["fields"] = validated
-    logger.info("[TemplateAnalysis] manifest_version=2")
-    logger.info(
-        "[TemplateAnalysis] blocks_count=%s",
-        len(state["layout"].get("canonical_blocks", [])),
-    )
-    logger.info(
-        "[TemplateAnalysis] repeat_groups_count=%s",
-        len(state["layout"].get("repeat_groups", [])),
-    )
-    logger.info("[TemplateAnalysis] fields_count=%s", len(validated))
-    logger.info(
-        "[TemplateAnalysis] rejected_fields_count=%s",
-        max(0, len(planned_fields) - len(validated)),
-    )
+    state["critic"] = critic
     return state
 
 
@@ -123,12 +98,12 @@ def build_template_analysis_graph():
     graph.add_node("load_template_bytes", _load_template_bytes)
     graph.add_node("extract_evidence", _extract_evidence)
     graph.add_node("build_candidates", _build_candidates)
-    graph.add_node("plan_and_validate", _plan_and_validate)
+    graph.add_node("group_validate_and_critic", _group_validate_and_critic)
     graph.set_entry_point("load_template_bytes")
     graph.add_edge("load_template_bytes", "extract_evidence")
     graph.add_edge("extract_evidence", "build_candidates")
-    graph.add_edge("build_candidates", "plan_and_validate")
-    graph.add_edge("plan_and_validate", END)
+    graph.add_edge("build_candidates", "group_validate_and_critic")
+    graph.add_edge("group_validate_and_critic", END)
     return graph.compile()
 
 
@@ -149,6 +124,8 @@ def run_template_analysis(
             "layout": {},
             "field_candidates": [],
             "fields": [],
+            "grouped_fields": [],
+            "critic": {},
         }
     )
     manifest = {
@@ -174,6 +151,9 @@ def run_template_analysis(
             "graph_module": __file__,
             "blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])),
             "fields_count": len(result.get("fields", [])),
+            "raw_candidates_count": len(result.get("field_candidates", [])),
+            "grouped_fields_count": len(result.get("grouped_fields", [])),
+            "critic": result.get("critic", {}),
         }
 
     print(f"[TemplateAnalysis] manifest_version={manifest['version']}")

@@ -38,6 +38,7 @@ class RenderContract(BaseModel):
     block_tokens: dict[str, str] = Field(default_factory=dict)
     empty_value_policy: str = "remove_placeholder"
     occurrence_selector: dict[str, Any] = Field(default_factory=dict)
+    repeat_items: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ValidationContract(BaseModel):
@@ -55,6 +56,7 @@ class SubFieldContract(BaseModel):
 class TemplateFieldV2(BaseModel):
     name: str
     display_label: str = ""
+    aliases: list[str] = Field(default_factory=list)
     field_type: FieldType
     required: bool = False
     source_classification: SourceClassification = "resume_fact"
@@ -70,6 +72,7 @@ class TemplateFieldV2(BaseModel):
     source_block_ids: list[str] = Field(default_factory=list)
     template_evidence: dict[str, Any] = Field(default_factory=dict)
     occurrence_selector: dict[str, Any] = Field(default_factory=dict)
+    repeat_items: list[dict[str, str]] = Field(default_factory=list)
 
 
 class TemplateManifestV2(BaseModel):

@@ -129,6 +129,20 @@ def print_manifest(manifest: dict) -> None:
             sf_type = sf.get('field_type', 'scalar')
             sf_token = sf.get('template_token', '')
             print(f"    - {sf_name} ({sf_type}) token: {sf_token}")
+    print(f"  manifest version : {manifest.get('version')}")
+    print(f"  manifest schema  : {manifest.get('manifest_schema')}")
+    dbg = manifest.get('debug', {})
+    print(f"  debug.pipeline_version : {dbg.get('pipeline_version')}")
+    print(f"  blocks_count     : {dbg.get('blocks_count', manifest.get('layout',{}).get('blocks_count'))}")
+    print(f"  raw_candidates_count : {dbg.get('raw_candidates_count')}")
+    print(f"  grouped_fields_count : {dbg.get('grouped_fields_count')}")
+    print(f"  critic score     : {(dbg.get('critic') or {}).get('score')}")
+    if manifest.get('version') != 2:
+        raise SystemExit('Manifest v1 detected; expected v2')
+    names = [f.get('name') for f in fields]
+    if len(names) != len(set(names)):
+        print('WARNING: duplicate field names detected')
+
     print(f"{'='*145}\n")
 
 
