@@ -26,13 +26,45 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
 
         if field.get("name") == "candidate_own_cv":
             joined = " ".join((blocks[bid].get("evidence_text") or "") for bid in source_ids).lower()
-            if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]):
+            placeholders = " ".join((blocks[bid].get("placeholder_text") or "") for bid in source_ids).lower()
+            # Require explicit placeholder-level evidence, not just heading text.
+            if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) or "cv" not in placeholders:
                 reject_reason = "hallucinated_candidate_own_cv"
                 logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
                 continue
 
         rc = field.get("render_contract") or {}
         token = field.get("template_token") or rc.get("anchor_token") or ""
+        placeholder_tokens = {
+            str(blocks[bid].get("placeholder_text") or "").strip()
+            for bid in source_ids
+            if blocks[bid].get("placeholder_text")
+        }
+        if placeholder_tokens and not str(token).upper().startswith("MERGEFIELD"):
+            # Layout evidence is the source of truth. If all blocks agree on the same placeholder,
+            # normalize the manifest token and render anchor to that placeholder.
+            if len(placeholder_tokens) == 1:
+                normalized = next(iter(placeholder_tokens))
+                field["template_token"] = normalized
+                token = normalized
+                rc["anchor_token"] = normalized
+                field["render_contract"] = rc
+            elif token and token not in placeholder_tokens:
+                reject_reason = "token_not_supported_by_source_blocks"
+                logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+                continue
+
+        evidence = field.get("template_evidence") or {}
+        if not evidence:
+            reject_reason = "missing_template_evidence"
+            logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+            continue
+        evidence.setdefault("section_heading", blocks[source_ids[0]].get("section_heading"))
+        evidence.setdefault("label_text", blocks[source_ids[0]].get("label_text"))
+        evidence.setdefault("placeholder_text", blocks[source_ids[0]].get("placeholder_text"))
+        evidence.setdefault("evidence_text", blocks[source_ids[0]].get("evidence_text"))
+        field["template_evidence"] = evidence
+
         field_invalid = False
         for bid in source_ids:
             b = blocks[bid]
@@ -63,6 +95,9 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         sub_fields = field.get("sub_fields")
         if isinstance(sub_fields, list):
             kept = [sf for sf in sub_fields if sf.get("template_token") and sf.get("name")]
+            # "[Bullet point list]" belongs to interests_and_activities only.
+            if field.get("name") in {"work_experience", "education"}:
+                kept = [sf for sf in kept if str(sf.get("template_token")).strip().lower() != "[bullet point list]"]
             field["sub_fields"] = kept
             if field.get("field_type") == "array_object" and not kept:
                 reject_reason = "array_object_without_sub_fields"
