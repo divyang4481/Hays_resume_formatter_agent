@@ -24,8 +24,12 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
             continue
 
-        field_name = str(field.get("name") or "").lower()
-        if "cv" in field_name:
+        # Generic anti-hallucination rule for CV-like targets (no field-name hardcoding):
+        # if either declared token/anchor indicates CV content, require explicit CV evidence.
+        declared_token = str(field.get("template_token") or "").lower()
+        declared_anchor = str((field.get("render_contract") or {}).get("anchor_token") or "").lower()
+        cv_like_declared = "cv" in declared_token or "cv" in declared_anchor
+        if cv_like_declared:
             joined = " ".join((blocks[bid].get("evidence_text") or "") for bid in source_ids).lower()
             placeholders = " ".join((blocks[bid].get("placeholder_text") or "") for bid in source_ids).lower()
             # For CV-like fields, require explicit placeholder-level CV evidence,
