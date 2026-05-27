@@ -86,13 +86,24 @@ AWS runtime variables used by docker compose:
 
 ## Run locally with containers (using AWS services)
 
+To rebuild and start the services cleanly:
+
 ```powershell
-docker compose -f docker-compose.local.yml up --build
+docker compose -f docker-compose.local.yml down
+docker compose -f docker-compose.local.yml up --build -d
 ```
 
-This runs API and worker locally while using AWS S3, SQS, RDS, and Bedrock per `.env`.
+To inspect the logs and confirm the active template analysis pipeline version fingerprint:
 
-If `BEDROCK_AGENT_ID` and `BEDROCK_AGENT_ALIAS_ID` are set, worker inference calls Bedrock Agent Runtime.
+```powershell
+docker compose -f docker-compose.local.yml logs worker --tail=100
+```
+
+Verify that the logs contain:
+`[TemplateAnalysis] pipeline_version=layout_v2_agentic_qc_2026_05_28`
+
+This runs API and worker locally while using AWS S3, SQS, RDS, and Bedrock per `.env`.
+The local directory is mounted as a volume so that host code changes are instantly reflected without requiring image rebuilds.
 
 ## Quick start without containers (optional)
 

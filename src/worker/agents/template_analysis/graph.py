@@ -23,7 +23,8 @@ from src.worker.agents.template_analysis.manifest_validator import validate_mani
 
 
 logger = logging.getLogger(__name__)
-PIPELINE_VERSION = "layout_v2_agentic_qc"
+TEMPLATE_ANALYSIS_PIPELINE_VERSION = "layout_v2_agentic_qc_2026_05_28"
+PIPELINE_VERSION = TEMPLATE_ANALYSIS_PIPELINE_VERSION
 
 
 class TemplateAnalysisState(TypedDict):
@@ -97,6 +98,9 @@ def build_template_analysis_graph():
 
 
 def run_template_analysis(template_id: str, template_name: str, template_object_key: str) -> GraphResult:
+    print(f"[TemplateAnalysis] pipeline_version={TEMPLATE_ANALYSIS_PIPELINE_VERSION}")
+    print(f"[TemplateAnalysis] graph_module={__file__}")
+    
     app = build_template_analysis_graph()
     result = app.invoke({"template_id": template_id, "template_name": template_name, "template_object_key": template_object_key, "template_bytes": b"", "evidence": {}, "layout": {}, "field_candidates": [], "fields": []})
     manifest = {
@@ -105,4 +109,19 @@ def run_template_analysis(template_id: str, template_name: str, template_object_
         "layout": {"blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])), "repeat_groups_count": len(result.get("layout", {}).get("repeat_groups", []))},
         "fields": result.get("fields", []),
     }
+    
+    from src.shared.config import settings
+    if settings.app_env != "production":
+        manifest["debug"] = {
+            "pipeline_version": TEMPLATE_ANALYSIS_PIPELINE_VERSION,
+            "graph_module": __file__,
+            "blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])),
+            "fields_count": len(result.get("fields", [])),
+        }
+        
+    print(f"[TemplateAnalysis] manifest_version={manifest['version']}")
+    print(f"[TemplateAnalysis] manifest_schema={manifest.get('manifest_schema')}")
+    print(f"[TemplateAnalysis] blocks_count={len(result.get('layout', {}).get('canonical_blocks', []))}")
+    print(f"[TemplateAnalysis] fields_count={len(result.get('fields', []))}")
+    
     return GraphResult(status=JobStatus.COMPLETED, data=manifest)

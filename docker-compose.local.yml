@@ -3,7 +3,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     env_file:
@@ -31,12 +34,16 @@ services:
       - BEDROCK_AGENT_ALIAS_ID=${BEDROCK_AGENT_ALIAS_ID}
       - BEDROCK_KB_ID=${BEDROCK_KB_ID}
     volumes:
-      - C:/Users/dpanc/.aws:/root/.aws:ro
+      - .:/app
+      - ~/.aws:/root/.aws:ro
 
   worker:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: python -m src.worker.main
     env_file:
       - .env
@@ -63,4 +70,5 @@ services:
       - BEDROCK_AGENT_ALIAS_ID=${BEDROCK_AGENT_ALIAS_ID}
       - BEDROCK_KB_ID=${BEDROCK_KB_ID}
     volumes:
-      - C:/Users/dpanc/.aws:/root/.aws:ro
+      - .:/app
+      - ~/.aws:/root/.aws:ro
