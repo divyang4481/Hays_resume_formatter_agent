@@ -24,10 +24,12 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
             continue
 
-        if field.get("name") == "candidate_own_cv":
+        field_name = str(field.get("name") or "").lower()
+        if "cv" in field_name:
             joined = " ".join((blocks[bid].get("evidence_text") or "") for bid in source_ids).lower()
             placeholders = " ".join((blocks[bid].get("placeholder_text") or "") for bid in source_ids).lower()
-            # Require explicit placeholder-level evidence, not just heading text.
+            # For CV-like fields, require explicit placeholder-level CV evidence,
+            # not just a nearby heading mention.
             if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) or "cv" not in placeholders:
                 reject_reason = "hallucinated_candidate_own_cv"
                 logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
@@ -95,9 +97,19 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         sub_fields = field.get("sub_fields")
         if isinstance(sub_fields, list):
             kept = [sf for sf in sub_fields if sf.get("template_token") and sf.get("name")]
-            # "[Bullet point list]" belongs to interests_and_activities only.
-            if field.get("name") in {"work_experience", "education"}:
-                kept = [sf for sf in kept if str(sf.get("template_token")).strip().lower() != "[bullet point list]"]
+            # Generic evidence-based pruning: keep only sub-field tokens that are
+            # actually evidenced by the parent field source blocks.
+            source_placeholders = {
+                str(blocks[bid].get("placeholder_text") or "").strip().lower()
+                for bid in source_ids
+                if blocks[bid].get("placeholder_text")
+            }
+            if source_placeholders:
+                kept = [
+                    sf
+                    for sf in kept
+                    if str(sf.get("template_token") or "").strip().lower() in source_placeholders
+                ]
             field["sub_fields"] = kept
             if field.get("field_type") == "array_object" and not kept:
                 reject_reason = "array_object_without_sub_fields"
