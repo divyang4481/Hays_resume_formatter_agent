@@ -9,5 +9,6 @@ def test_payload_separates_channels():
     mapping = {"field_mappings": {"a": {"value": "x"}, "b": {"value": ["y"]}, "c": {"value": [{"k": "v"}]}}}
     payload = build_filled_template_payload(manifest, mapping)
     assert payload["render_values"]["MERGEFIELD A"] == "x"
-    assert payload["placeholder_values"]["[B]"] == ["y"]
+    b_item = next(item for item in payload["placeholder_values"] if item["token"] == "[B]")
+    assert b_item["value"] == ["y"]
     assert payload["repeat_blocks"]["c"][0]["k"] == "v"

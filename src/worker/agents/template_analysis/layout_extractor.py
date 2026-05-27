@@ -111,9 +111,7 @@ def extract_layout_blocks_from_docx(docx_bytes: bytes) -> dict:
                             evidence_text=row_text,
                         )
 
-    if not blocks:
-        return _extract_from_xml_fields(docx_bytes)
-    return {"blocks": blocks, "repeat_groups": repeat_groups}
+    return _extract_from_xml_fields(docx_bytes)
 
 
 from pathlib import Path

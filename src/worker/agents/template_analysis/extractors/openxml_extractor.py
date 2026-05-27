@@ -11,29 +11,16 @@ MERGE_RE = re.compile(r"MERGEFIELD\s+([^\s\\]+)", re.IGNORECASE)
 
 
 def extract_openxml_evidence(docx_bytes: bytes) -> dict:
+    from src.worker.agents.template_analysis.layout_extractor import _extract_from_xml_fields
+    layout = _extract_from_xml_fields(docx_bytes)
     blocks = []
-    c = 0
-    with ZipFile(BytesIO(docx_bytes)) as zf:
-        names = [n for n in zf.namelist() if n.startswith("word/") and ("document.xml" in n or "header" in n or "footer" in n or n.endswith("footnotes.xml") or n.endswith("endnotes.xml"))]
-        for name in names:
-            root = ET.fromstring(zf.read(name))
-            for p_idx, p in enumerate(root.iter(f"{W}p")):
-                texts = [t.text or "" for t in p.iter(f"{W}t")]
-                instr = " ".join((t.text or "") for t in p.iter(f"{W}instrText"))
-                full = " ".join(texts).strip()
-                tokens = TOKEN_RE.findall(full)
-                merge = MERGE_RE.search(instr)
-                raw = []
-                if merge:
-                    raw.append(f"MERGEFIELD {merge.group(1)}")
-                raw.extend(tokens)
-                for r_idx, tok in enumerate(raw):
-                    c += 1
-                    blocks.append({
-                        "source": "openxml", "block_id": f"ox_b{c:03d}", "location": "header" if "header" in name else "footer" if "footer" in name else "body",
-                        "xml_file": name, "container_type": "paragraph", "section_heading": "", "label_text": re.sub(TOKEN_RE, "", full).strip(" :\t"),
-                        "placeholder_text": tok if tok.startswith("[") else None, "mergefield_name": merge.group(1) if tok.startswith("MERGEFIELD") and merge else None,
-                        "raw_token": tok, "evidence_text": full, "table_index": None, "row_index": None, "cell_index": None,
-                        "paragraph_index": p_idx, "run_index": r_idx, "is_bullet": False, "style_name": "", "xml_preview": ET.tostring(p, encoding="unicode")[:300],
-                    })
+    for i, b in enumerate(layout.get("blocks", []), start=1):
+        b = dict(b)
+        b["source"] = "openxml"
+        b["block_id"] = f"ox_b{i:03d}"
+        # Set mergefield_name if token represents a MERGEFIELD
+        tok = b.get("raw_token") or ""
+        if tok.startswith("MERGEFIELD "):
+            b["mergefield_name"] = tok.replace("MERGEFIELD ", "").strip()
+        blocks.append(b)
     return {"source": "openxml", "blocks": blocks, "warnings": []}

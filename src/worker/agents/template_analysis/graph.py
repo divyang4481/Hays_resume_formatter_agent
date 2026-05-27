@@ -17,14 +17,28 @@ from src.worker.agents.template_analysis.extractors import (
     extract_visual_layout_evidence,
     reconcile_template_evidence,
 )
-from src.worker.agents.template_analysis.field_candidate_builder import build_field_candidates_from_evidence
-from src.worker.agents.template_analysis.manifest_critic import critique_manifest_against_evidence
-from src.worker.agents.template_analysis.manifest_validator import validate_manifest_fields_against_layout
+from src.worker.agents.template_analysis.field_candidate_builder import (
+    build_field_candidates_from_evidence,
+)
+from src.worker.agents.template_analysis.manifest_critic import (
+    critique_manifest_against_evidence,
+)
+from src.worker.agents.template_analysis.manifest_validator import (
+    validate_manifest_fields_against_layout,
+)
 
 
 logger = logging.getLogger(__name__)
 TEMPLATE_ANALYSIS_PIPELINE_VERSION = "layout_v2_agentic_qc_2026_05_28"
 PIPELINE_VERSION = TEMPLATE_ANALYSIS_PIPELINE_VERSION
+
+
+from src.worker.agents.template_analysis.utils import (
+    _extract_template_tokens,
+    _extract_template_text,
+    _field_has_evidence,
+    _build_grouped_section_fields,
+)
 
 
 class TemplateAnalysisState(TypedDict):
@@ -39,17 +53,23 @@ class TemplateAnalysisState(TypedDict):
 
 
 def _load_template_bytes(state: TemplateAnalysisState) -> TemplateAnalysisState:
+    if state.get("template_bytes"):
+        return state
     state["template_bytes"] = object_store.get_bytes(state["template_object_key"])
     return state
 
 
 def _extract_evidence(state: TemplateAnalysisState) -> TemplateAnalysisState:
     logger.info("[TemplateAnalysis] pipeline_version=%s", PIPELINE_VERSION)
-    logger.info("[TemplateAnalysis] graph_file=src/worker/agents/template_analysis/graph.py")
+    logger.info(
+        "[TemplateAnalysis] graph_file=src/worker/agents/template_analysis/graph.py"
+    )
     tb = state["template_bytes"]
     ox = extract_openxml_evidence(tb)
     pd = extract_python_docx_evidence(tb)
-    dl = extract_docling_layout_evidence(tb, state.get("template_name") or "template.docx")
+    dl = extract_docling_layout_evidence(
+        tb, state.get("template_name") or "template.docx"
+    )
     vl = extract_visual_layout_evidence(tb)
     state["layout"] = reconcile_template_evidence(ox, pd, dl, vl)
     state["evidence"] = {"openxml": ox, "python_docx": pd, "docling": dl, "visual": vl}
@@ -70,16 +90,31 @@ def _plan_and_validate(state: TemplateAnalysisState) -> TemplateAnalysisState:
         repeat_groups=state["layout"].get("repeat_groups", []),
     )
     planned_fields = planned.get("fields", [])
-    validated = validate_manifest_fields_against_layout(planned_fields, {"blocks": state["layout"].get("canonical_blocks", [])})
-    critique = critique_manifest_against_evidence({"fields": validated}, state["layout"])
+    validated = validate_manifest_fields_against_layout(
+        planned_fields, {"blocks": state["layout"].get("canonical_blocks", [])}
+    )
+    critique = critique_manifest_against_evidence(
+        {"fields": validated}, state["layout"]
+    )
     if not critique["passed"]:
-        validated = validate_manifest_fields_against_layout(validated, {"blocks": state["layout"].get("canonical_blocks", [])})
+        validated = validate_manifest_fields_against_layout(
+            validated, {"blocks": state["layout"].get("canonical_blocks", [])}
+        )
     state["fields"] = validated
     logger.info("[TemplateAnalysis] manifest_version=2")
-    logger.info("[TemplateAnalysis] blocks_count=%s", len(state["layout"].get("canonical_blocks", [])))
-    logger.info("[TemplateAnalysis] repeat_groups_count=%s", len(state["layout"].get("repeat_groups", [])))
+    logger.info(
+        "[TemplateAnalysis] blocks_count=%s",
+        len(state["layout"].get("canonical_blocks", [])),
+    )
+    logger.info(
+        "[TemplateAnalysis] repeat_groups_count=%s",
+        len(state["layout"].get("repeat_groups", [])),
+    )
     logger.info("[TemplateAnalysis] fields_count=%s", len(validated))
-    logger.info("[TemplateAnalysis] rejected_fields_count=%s", max(0, len(planned_fields) - len(validated)))
+    logger.info(
+        "[TemplateAnalysis] rejected_fields_count=%s",
+        max(0, len(planned_fields) - len(validated)),
+    )
     return state
 
 
@@ -97,20 +132,42 @@ def build_template_analysis_graph():
     return graph.compile()
 
 
-def run_template_analysis(template_id: str, template_name: str, template_object_key: str) -> GraphResult:
+def run_template_analysis(
+    template_id: str, template_name: str, template_object_key: str, template_bytes: bytes | None = None
+) -> GraphResult:
     print(f"[TemplateAnalysis] pipeline_version={TEMPLATE_ANALYSIS_PIPELINE_VERSION}")
     print(f"[TemplateAnalysis] graph_module={__file__}")
-    
+
     app = build_template_analysis_graph()
-    result = app.invoke({"template_id": template_id, "template_name": template_name, "template_object_key": template_object_key, "template_bytes": b"", "evidence": {}, "layout": {}, "field_candidates": [], "fields": []})
+    result = app.invoke(
+        {
+            "template_id": template_id,
+            "template_name": template_name,
+            "template_object_key": template_object_key,
+            "template_bytes": template_bytes or b"",
+            "evidence": {},
+            "layout": {},
+            "field_candidates": [],
+            "fields": [],
+        }
+    )
     manifest = {
-        "manifest_id": str(uuid4()), "template_id": template_id, "version": 2, "manifest_schema": "template_manifest_v2",
+        "manifest_id": str(uuid4()),
+        "template_id": template_id,
+        "version": 2,
+        "manifest_schema": "template_manifest_v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "layout": {"blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])), "repeat_groups_count": len(result.get("layout", {}).get("repeat_groups", []))},
+        "layout": {
+            "blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])),
+            "repeat_groups_count": len(
+                result.get("layout", {}).get("repeat_groups", [])
+            ),
+        },
         "fields": result.get("fields", []),
     }
-    
+
     from src.shared.config import settings
+
     if settings.app_env != "production":
         manifest["debug"] = {
             "pipeline_version": TEMPLATE_ANALYSIS_PIPELINE_VERSION,
@@ -118,10 +175,12 @@ def run_template_analysis(template_id: str, template_name: str, template_object_
             "blocks_count": len(result.get("layout", {}).get("canonical_blocks", [])),
             "fields_count": len(result.get("fields", [])),
         }
-        
+
     print(f"[TemplateAnalysis] manifest_version={manifest['version']}")
     print(f"[TemplateAnalysis] manifest_schema={manifest.get('manifest_schema')}")
-    print(f"[TemplateAnalysis] blocks_count={len(result.get('layout', {}).get('canonical_blocks', []))}")
+    print(
+        f"[TemplateAnalysis] blocks_count={len(result.get('layout', {}).get('canonical_blocks', []))}"
+    )
     print(f"[TemplateAnalysis] fields_count={len(result.get('fields', []))}")
-    
+
     return GraphResult(status=JobStatus.COMPLETED, data=manifest)

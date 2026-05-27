@@ -48,6 +48,33 @@ def _resolve_generic_placeholder_name(raw_placeholder: str, source_hint: str, he
     return candidate
 
 
+def _find_table_row_label(p: ET.Element, ns: dict, parent_map: dict) -> str | None:
+    curr = p
+    cell = None
+    while curr in parent_map:
+        curr = parent_map[curr]
+        if curr.tag == f"{{{ns['w']}}}tc":
+            cell = curr
+            break
+            
+    if cell is not None:
+        row = parent_map.get(cell)
+        if row is not None and row.tag == f"{{{ns['w']}}}tr":
+            cells = row.findall(f"{{{ns['w']}}}tc", ns)
+            try:
+                cell_idx = cells.index(cell)
+            except ValueError:
+                cell_idx = -1
+                
+            if cell_idx > 0:
+                left_cell = cells[cell_idx - 1]
+                left_texts = [t.text or "" for t in left_cell.findall(f".//{{{ns['w']}}}t", ns)]
+                label_text = "".join(left_texts).strip()
+                if label_text:
+                    return label_text
+    return None
+
+
 def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
     if not docx_path.is_file():
         raise FileNotFoundError(f"DOCX not found: {docx_path}")
@@ -56,6 +83,7 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
         xml_bytes = zip_ref.read("word/document.xml")
     root = ET.fromstring(xml_bytes)
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    parent_map = {c: p for p in root.iter() for c in p}
 
     fields: List[Dict] = []
     counts_by_name: dict[str, int] = {}
@@ -87,7 +115,8 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
         if paragraph_text and ("heading" in style_val or "title" in style_val or paragraph_text.isupper()):
             current_heading = paragraph_text
 
-        source_hint = paragraph_text or current_heading
+        table_label = _find_table_row_label(p, ns, parent_map)
+        source_hint = table_label or paragraph_text or current_heading
 
         for fld in p.findall('.//w:fldSimple', ns):
             instr_text = fld.attrib.get(f"{{{ns['w']}}}instr", "")

@@ -74,7 +74,7 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         field_invalid = False
         for bid in source_ids:
             b = blocks[bid]
-            if token and b.get("placeholder_text") and token != b.get("placeholder_text") and not str(token).upper().startswith("MERGEFIELD"):
+            if token and b.get("placeholder_text") and token != b.get("placeholder_text") and not str(token).upper().startswith("MERGEFIELD") and field.get("field_type") != "array_object":
                 field_invalid = True
                 reject_reason = "token_not_supported_by_source_block"
                 break
