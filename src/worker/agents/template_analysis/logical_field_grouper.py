@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter, defaultdict
 from copy import deepcopy
 from typing import Any
 
 MERGEFIELD_RE = re.compile(r"^MERGEFIELD\s+", re.I)
+logger = logging.getLogger(__name__)
 
 
 def canonicalize_field_name(text: str) -> str:
     cleaned = MERGEFIELD_RE.sub("", (text or "").strip())
+    cleaned = re.sub(r"^MACROBUTTON\s+AcceptAllChangesShown\s+", "", cleaned, flags=re.I)
     cleaned = cleaned.strip("[]{}()<>")
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", cleaned).strip("_").lower()
     cleaned = re.sub(r"_+", "_", cleaned)
@@ -17,12 +20,12 @@ def canonicalize_field_name(text: str) -> str:
 
 
 def normalize_mergefield_name(mergefield_or_token: str, label_text: str | None = None) -> str:
-    """Generic mergefield normalization without template-specific aliases."""
+    """Generic mergefield normalization without any template-specific field mapping."""
     key = canonicalize_field_name(mergefield_or_token)
     key = re.sub(r"^(m_|t_|e_)", "", key)
     key = re.sub(r"_+", "_", key).strip("_")
-    if not key and label_text:
-        key = canonicalize_field_name(label_text)
+    lbl = canonicalize_field_name(label_text or "")
+    key = key or lbl
     return key or "field"
 
 
@@ -80,9 +83,13 @@ def _group_identical_candidates(fields: list[dict]) -> list[dict]:
         label = f.get("display_label") or (f.get("template_evidence") or {}).get("label_text") or ""
         raw_name = f.get("name") or f.get("suggested_name") or label or f.get("template_token")
         if str(f.get("template_token") or "").upper().startswith("MERGEFIELD"):
-            f["name"] = normalize_mergefield_name(str(f.get("template_token") or ""), label)
+            normalized = normalize_mergefield_name(str(f.get("template_token") or ""), label)
+            f["name"] = normalized
+            f["suggested_name"] = normalized
         else:
             f["name"] = canonicalize_field_name(str(raw_name))
+            if f.get("suggested_name"):
+                f["name"] = canonicalize_field_name(str(f.get("suggested_name")))
         f["display_label"] = label
         f["source_classification"] = infer_source_classification(f)
         merged.append(f)
@@ -95,6 +102,7 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
         token = str(field.get("template_token") or "").strip()
         if token:
             token_fields[token].append(field)
+    logger.info("[LogicalGrouper] section=%s token_candidates=%s", section.upper(), len(token_fields))
     if len(token_fields) < 2:
         return None
 
@@ -106,9 +114,11 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
             repeated = list(proxy.keys())
             repeat_count = next(iter(proxy.values()))
         else:
+            logger.info("[LogicalGrouper] section=%s repeat_tokens_found=0", section.upper())
             return None
     else:
         repeat_count = min(freqs[t] for t in repeated)
+    logger.info("[LogicalGrouper] section=%s repeat_tokens_found=%s", section.upper(), len(repeated))
     sub_fields = []
     block_tokens = {}
     repeat_items: list[dict[str, str]] = []
@@ -134,9 +144,10 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
                 row[sub["name"]] = source_ids[0]
                 source_block_ids.extend(source_ids)
         repeat_items.append(row)
+    logger.info("[LogicalGrouper] section=%s repeat_items=%s", section.upper(), len(repeat_items))
 
     heading = section.upper()
-    return {
+    grouped = {
         "name": canonicalize_field_name(section),
         "display_label": heading,
         "field_type": "array_object",
@@ -153,6 +164,8 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
         },
         "source_classification": "resume_fact",
     }
+    logger.info("[LogicalGrouper] section=%s grouped_field_created=%s", section.upper(), grouped["name"])
+    return grouped
 
 
 def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> list[dict]:
@@ -192,7 +205,8 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
         logical.extend(sec_fields)
 
     for field in logical:
-        field["name"] = canonicalize_field_name(field.get("name") or field.get("display_label") or "field")
+        preferred_name = field.get("suggested_name") or field.get("name") or field.get("display_label") or "field"
+        field["name"] = canonicalize_field_name(preferred_name)
         field["source_classification"] = infer_source_classification(field)
 
     dedup: dict[str, dict] = {}
