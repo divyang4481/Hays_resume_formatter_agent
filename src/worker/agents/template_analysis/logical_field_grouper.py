@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 MERGEFIELD_RE = re.compile(r"^MERGEFIELD\s+", re.I)
+CAMEL_TOKEN_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+")
 logger = logging.getLogger(__name__)
 
 
@@ -19,14 +20,45 @@ def canonicalize_field_name(text: str) -> str:
     return cleaned or "field"
 
 
+def split_camel_case(name: str) -> list[str]:
+    return CAMEL_TOKEN_RE.findall(name or "")
+
+
+def _normalize_suffix_tokens(tokens: list[str]) -> list[str]:
+    lowered = [t.lower() for t in tokens if t]
+    compact = "".join(lowered)
+    if compact in {"fullname", "name"}:
+        return ["name"]
+    if compact in {"id"}:
+        return ["id"]
+    if compact in {"tel", "telno", "phoneno", "phone", "mobile", "mobileno"}:
+        return ["phone"]
+    if compact in {"jobtitle", "title"}:
+        return ["title"]
+    return lowered
+
+
 def normalize_mergefield_name(mergefield_or_token: str, label_text: str | None = None) -> str:
-    """Generic mergefield normalization without any template-specific field mapping."""
-    key = canonicalize_field_name(mergefield_or_token)
-    key = re.sub(r"^(m_|t_|e_)", "", key)
-    key = re.sub(r"_+", "_", key).strip("_")
-    lbl = canonicalize_field_name(label_text or "")
-    key = key or lbl
-    return key or "field"
+    raw = MERGEFIELD_RE.sub("", (mergefield_or_token or "").strip()).strip("{}")
+    raw_name = re.split(r"\s+", raw, maxsplit=1)[0]
+    parts = split_camel_case(raw_name)
+    if not parts:
+        return canonicalize_field_name(label_text or mergefield_or_token) or "field"
+    prefix = parts[0].lower()
+    suffix = _normalize_suffix_tokens(parts[1:])
+    if prefix == "candidate" and suffix:
+        return canonicalize_field_name("candidate_" + "_".join(suffix))
+    if prefix == "employee" and suffix:
+        return canonicalize_field_name("presenter_" + "_".join(suffix))
+    return canonicalize_field_name("_".join(_normalize_suffix_tokens(parts))) or canonicalize_field_name(label_text or "") or "field"
+
+
+def extract_public_token(token: str) -> str:
+    tok = (token or "").strip()
+    m = re.match(r'^MACROBUTTON\s+AcceptAllChangesShown\s+"(.+)"$', tok, flags=re.I)
+    if m:
+        return m.group(1)
+    return tok
 
 
 def infer_source_classification(field: dict) -> str:
@@ -82,10 +114,23 @@ def _group_identical_candidates(fields: list[dict]) -> list[dict]:
 
         label = f.get("display_label") or (f.get("template_evidence") or {}).get("label_text") or ""
         raw_name = f.get("name") or f.get("suggested_name") or label or f.get("template_token")
-        if str(f.get("template_token") or "").upper().startswith("MERGEFIELD"):
-            normalized = normalize_mergefield_name(str(f.get("template_token") or ""), label)
+        raw_token = str(f.get("template_token") or "")
+        f["raw_token"] = raw_token
+        f["template_token"] = extract_public_token(raw_token)
+        if raw_token.upper().startswith("MERGEFIELD"):
+            normalized = normalize_mergefield_name(raw_token, label)
+            aliases = set(f.get("aliases") or [])
+            if f.get("name"):
+                aliases.add(canonicalize_field_name(str(f.get("name"))))
+            if f.get("suggested_name"):
+                aliases.add(canonicalize_field_name(str(f.get("suggested_name"))))
+            aliases.discard(normalized)
+            if aliases:
+                f["aliases"] = sorted(a for a in aliases if a)
             f["name"] = normalized
             f["suggested_name"] = normalized
+            if not raw_token.upper().startswith("MERGEFIELD TABLESTART:") and not raw_token.upper().startswith("MERGEFIELD TABLEEND:"):
+                f["field_type"] = "scalar"
         else:
             f["name"] = canonicalize_field_name(str(raw_name))
             if f.get("suggested_name"):
@@ -126,8 +171,9 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
 
     for token in repeated:
         name = canonicalize_field_name(token)
-        sub_fields.append({"name": name, "field_type": "array" if _is_bullet_token(token) else "scalar", "template_token": token})
-        block_tokens[name] = token
+        clean = extract_public_token(token)
+        sub_fields.append({"name": name, "field_type": "array" if _is_bullet_token(token) else "scalar", "template_token": clean, "raw_token": token})
+        block_tokens[name] = clean
 
     for idx in range(repeat_count):
         row: dict[str, str] = {}
@@ -151,13 +197,14 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
         "name": canonicalize_field_name(section),
         "display_label": heading,
         "field_type": "array_object",
-        "template_token": repeated[0],
+        "template_token": extract_public_token(repeated[0]),
+        "raw_token": repeated[0],
         "source_block_ids": sorted(set(source_block_ids)),
         "sub_fields": sub_fields,
         "template_evidence": {"section_heading": heading, "placeholder_tokens": repeated},
         "render_contract": {
             "render_strategy": "repeat_block",
-            "anchor_token": repeated[0],
+            "anchor_token": extract_public_token(repeated[0]),
             "block_tokens": block_tokens,
             "repeat_items": repeat_items,
             "occurrence_selector": {"section_heading": heading},
@@ -170,6 +217,20 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
 
 def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> list[dict]:
     merged = _group_identical_candidates(fields)
+    table_regions: dict[str, list[dict]] = defaultdict(list)
+    remaining: list[dict] = []
+    for field in merged:
+        raw = str(field.get("raw_token") or field.get("template_token") or "")
+        if raw.upper().startswith("MERGEFIELD TABLESTART:"):
+            region = raw.split(":", 1)[1].strip()
+            table_regions[region].append(field)
+            continue
+        if raw.upper().startswith("MERGEFIELD TABLEEND:"):
+            region = raw.split(":", 1)[1].strip()
+            table_regions[region].append(field)
+            continue
+        remaining.append(field)
+    merged = remaining
 
     by_section: dict[str, list[dict]] = defaultdict(list)
     for field in merged:
@@ -219,4 +280,30 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
         existing["source_block_ids"] = sorted(set((existing.get("source_block_ids") or []) + (field.get("source_block_ids") or [])))
         if existing.get("field_type") != "array_object" and field.get("field_type") == "array_object":
             dedup[name] = field
+    for region in table_regions:
+        region_lower = canonicalize_field_name(region)
+        members = [f for f in merged if str(f.get("raw_token") or "").upper().startswith("MERGEFIELD") and not str(f.get("raw_token") or "").upper().startswith("MERGEFIELD TABLE")]
+        if not members:
+            continue
+        sub_fields = []
+        block_tokens = {}
+        source_ids: list[str] = []
+        for m in members:
+            sub_name = normalize_mergefield_name(str(m.get("raw_token") or ""))
+            token = str(m.get("template_token") or "")
+            sub_fields.append({"name": sub_name, "field_type": "scalar", "template_token": token, "raw_token": str(m.get("raw_token") or "")})
+            block_tokens[sub_name] = token
+            source_ids.extend(m.get("source_block_ids") or [])
+        dedup[region_lower] = {
+            "name": region_lower,
+            "display_label": region,
+            "field_type": "array_object",
+            "template_token": sub_fields[0]["template_token"],
+            "raw_token": sub_fields[0]["raw_token"],
+            "source_block_ids": sorted(set(source_ids)),
+            "sub_fields": sub_fields,
+            "template_evidence": {"section_heading": region},
+            "render_contract": {"render_strategy": "mailmerge_table_region", "region_name": region, "block_tokens": block_tokens, "anchor_token": sub_fields[0]["template_token"]},
+            "source_classification": "resume_fact",
+        }
     return list(dedup.values())

@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.worker.agents.template_analysis.logical_field_grouper import canonicalize_field_name, normalize_mergefield_name
+from src.worker.agents.template_analysis.logical_field_grouper import canonicalize_field_name, normalize_mergefield_name, split_camel_case
 
 
 def test_canonicalize_field_name():
@@ -12,10 +12,15 @@ def test_canonicalize_field_name():
 
 
 def test_normalize_mergefield_name():
-    assert normalize_mergefield_name("MERGEFIELD CandidateFullName") == "candidatefullname"
-    assert normalize_mergefield_name("MERGEFIELD CandidateID") == "candidateid"
-    assert normalize_mergefield_name("MERGEFIELD EmployeeName") == "employeename"
-    assert normalize_mergefield_name("MERGEFIELD EmployeeJobTitle") == "employeejobtitle"
-    assert normalize_mergefield_name("MERGEFIELD EmployeeSpecialistArea") == "employeespecialistarea"
-    assert normalize_mergefield_name("MERGEFIELD EmployeeTelNo") == "employeetelno"
-    assert normalize_mergefield_name("MERGEFIELD EmployeeEmail") == "employeeemail"
+    assert split_camel_case("CandidateFullName") == ["Candidate", "Full", "Name"]
+    assert split_camel_case("EmployeeTelNo") == ["Employee", "Tel", "No"]
+    assert normalize_mergefield_name("MERGEFIELD CandidateFullName") == "candidate_name"
+    assert normalize_mergefield_name("MERGEFIELD CandidateID") == "candidate_id"
+    assert normalize_mergefield_name("MERGEFIELD CandidateTown") == "candidate_town"
+    assert normalize_mergefield_name("MERGEFIELD ExpectedSalary") == "expected_salary"
+    assert normalize_mergefield_name("MERGEFIELD NoticePeriod") == "notice_period"
+    assert normalize_mergefield_name("MERGEFIELD EmployeeName") == "presenter_name"
+    assert normalize_mergefield_name("MERGEFIELD EmployeeJobTitle") == "presenter_title"
+    assert normalize_mergefield_name("MERGEFIELD EmployeeSpecialistArea") == "presenter_specialist_area"
+    assert normalize_mergefield_name("MERGEFIELD EmployeeTelNo") == "presenter_phone"
+    assert normalize_mergefield_name("MERGEFIELD EmployeeEmail") == "presenter_email"

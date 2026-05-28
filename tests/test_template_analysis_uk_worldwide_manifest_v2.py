@@ -22,14 +22,14 @@ def test_template_analysis_uk_worldwide_manifest_v2():
     assert len(field_names) == len(fields)
     assert "work_experience" in field_names
     assert "education" in field_names
-    assert "candidatefullname" in field_names
-    assert "candidateid" in field_names
-    assert "noticeperiod" in field_names
-    assert "employeename" in field_names
-    assert "employeejobtitle" in field_names
-    assert "employeespecialistarea" in field_names
-    assert "employeetelno" in field_names
-    assert "employeeemail" in field_names
+    assert "candidate_name" in field_names
+    assert "candidate_id" in field_names
+    assert "notice_period" in field_names
+    assert "presenter_name" in field_names
+    assert "presenter_title" in field_names
+    assert "presenter_specialist_area" in field_names
+    assert "presenter_phone" in field_names
+    assert "presenter_email" in field_names
     assert "our_expert_opinion" in field_names
     assert "candidate_own_cv" not in field_names
     assert "interests_and_activities" in field_names
