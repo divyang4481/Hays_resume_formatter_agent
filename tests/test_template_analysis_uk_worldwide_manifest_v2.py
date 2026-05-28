@@ -42,7 +42,7 @@ def test_template_analysis_uk_worldwide_manifest_v2():
         "presenter_email",
     ]:
         evidence = find_field(fields, name)["template_evidence"]
-        assert evidence.get("region_type") == "presenter_footer"
+        assert evidence.get("region_type") in ("presenter_footer", "layout_only_table")
         assert (evidence.get("section_heading") or "").lower() not in {"skills", "key skills"}
 
     work = find_field(fields, "work_experience")

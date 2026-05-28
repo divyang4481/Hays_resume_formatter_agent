@@ -216,6 +216,7 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
 
 def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> list[dict]:
     merged = _group_identical_candidates(fields)
+
     table_regions: dict[str, list[dict]] = defaultdict(list)
     remaining: list[dict] = []
     for field in merged:
@@ -283,8 +284,52 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
         existing["source_block_ids"] = sorted(set((existing.get("source_block_ids") or []) + (field.get("source_block_ids") or [])))
         if existing.get("field_type") != "array_object" and field.get("field_type") == "array_object":
             dedup[name] = field
+
+    # Process visual mailmerge regions cleanly
+    visual_table_regions = {}
+    for field in logical:
+        ev = field.get("template_evidence") or {}
+        if ev.get("region_type") == "mailmerge_table_region" and ev.get("region_name"):
+            region_name = ev.get("region_name")
+            visual_table_regions.setdefault(region_name, []).append(field)
+
+    # Remove them from top level dedup if they exist
+    for r_name, r_fields in visual_table_regions.items():
+        for rf in r_fields:
+            if rf.get("name") in dedup:
+                del dedup[rf["name"]]
+
+        heading = r_fields[0].get("display_label") or r_name
+        region_lower = canonicalize_field_name(heading)
+        sub_fields = []
+        block_tokens = {}
+        source_ids = []
+
+        for m in r_fields:
+            sub_name = normalize_mergefield_name(m.get("template_token") or m.get("name") or "field")
+            token = str(m.get("template_token") or "")
+            sub_fields.append({"name": sub_name, "field_type": "scalar", "template_token": token, "raw_token": str(m.get("raw_token") or "")})
+            block_tokens[sub_name] = token
+            source_ids.extend(m.get("source_block_ids") or [])
+
+        dedup[region_lower] = {
+            "name": region_lower,
+            "display_label": heading,
+            "field_type": "array_object",
+            "template_token": sub_fields[0]["template_token"],
+            "raw_token": sub_fields[0]["raw_token"],
+            "source_block_ids": sorted(set(source_ids)),
+            "sub_fields": sub_fields,
+            "template_evidence": {"section_heading": heading, "region_type": "mailmerge_table_region", "region_name": r_name},
+            "render_contract": {"render_strategy": "mailmerge_table_region", "region_name": r_name, "block_tokens": block_tokens, "anchor_token": sub_fields[0]["template_token"]},
+            "source_classification": "resume_fact",
+        }
+
     for region in table_regions:
         region_lower = canonicalize_field_name(region)
+        if region_lower in dedup and dedup[region_lower]["field_type"] == "array_object":
+            continue # already handled by visual pipeline
+
         members = [f for f in merged if str(f.get("raw_token") or "").upper().startswith("MERGEFIELD") and not str(f.get("raw_token") or "").upper().startswith("MERGEFIELD TABLE")]
         if not members:
             continue

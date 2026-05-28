@@ -24,3 +24,5 @@ tests/__pycache__/test_templates.cpython-311-pytest-8.4.2.pyc
 src/worker/agents/template_analysis/__pycache__/graph.cpython-311.pyc
 src/worker/__pycache__/agentic_core.cpython-311.pyc
 tests/__pycache__/test_templates.cpython-311-pytest-8.4.2.pyc
+venv/
+artifacts/
