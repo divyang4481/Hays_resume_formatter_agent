@@ -6,6 +6,7 @@ from typing import Any
 
 def critique_manifest(manifest: dict) -> dict:
     fields = manifest.get("fields", [])
+    evidence = manifest.get("layout", {})
     issues: list[dict[str, Any]] = []
 
     names = [f.get("name") for f in fields if f.get("name")]
@@ -34,8 +35,35 @@ def critique_manifest(manifest: dict) -> dict:
 
         if token == (field.get("display_label") or "") and token:
             issues.append({"severity": "warning", "code": "LABEL_AS_TOKEN", "field": name, "message": "Token appears to be label text rather than a placeholder token."})
+        if field.get("suggested_name") and field.get("name") != field.get("suggested_name"):
+            issues.append({"severity": "error", "code": "CANONICAL_NAME_NOT_APPLIED", "field": name})
+        if name == str(field.get("template_token") or "").strip().lower():
+            issues.append({"severity": "warning", "code": "RAW_FIELD_NAME", "field": name})
 
-    score = max(0.0, 1 - 0.05 * len(issues))
+    lower_names = {str(n).lower() for n in names}
+    for required in ("work_experience", "education"):
+        if required not in lower_names:
+            issues.append({"severity": "error", "code": "MISSING_GROUPED_SECTION", "section": required.upper()})
+
+    # Dynamic repeat evidence check: if section has 2+ unique placeholder tokens repeated >1 across blocks,
+    # require an array_object grouped field for that section.
+    canonical_blocks = evidence.get("canonical_blocks", [])
+    by_section: dict[str, list[dict]] = {}
+    for b in canonical_blocks:
+        sec = str(b.get("section_heading") or "").strip()
+        by_section.setdefault(sec, []).append(b)
+    grouped_sections = {str((f.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+                        for f in fields if f.get("field_type") == "array_object"}
+    for section, blocks in by_section.items():
+        placeholders = [str(b.get("placeholder_text") or "").strip() for b in blocks if b.get("placeholder_text")]
+        counts = Counter(placeholders)
+        repeated_tokens = [t for t, c in counts.items() if c > 1]
+        if len(set(placeholders)) >= 2 and len(repeated_tokens) >= 2 and section.strip().lower() not in grouped_sections:
+            issues.append({"severity": "error", "code": "MISSING_REPEAT_SECTION", "section": section})
+
+    error_count = sum(1 for i in issues if i.get("severity") == "error")
+    warning_count = sum(1 for i in issues if i.get("severity") == "warning")
+    score = max(0.0, 1 - 0.08 * error_count - 0.02 * warning_count)
     passed = not any(i["severity"] == "error" for i in issues)
     return {"passed": passed, "score": score, "issues": issues}
 

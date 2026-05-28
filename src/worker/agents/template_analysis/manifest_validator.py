@@ -7,6 +7,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _log_rejection(field: dict, reason: str) -> None:
+    logger.info("[ManifestValidator] removed field=%s reason=%s", field.get("name"), reason)
+
+
 def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) -> list[dict]:
     blocks = {b.get("block_id"): b for b in layout.get("blocks", [])}
     valid: list[dict[str, Any]] = []
@@ -17,11 +21,11 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         source_ids = field.get("source_block_ids") or []
         if not source_ids:
             reject_reason = "missing_source_block_ids"
-            logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+            _log_rejection(field, reject_reason)
             continue
         if any(bid not in blocks for bid in source_ids):
             reject_reason = "unknown_source_block_id"
-            logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+            _log_rejection(field, reject_reason)
             continue
 
         # Generic anti-hallucination rule for CV-like targets (no field-name hardcoding):
@@ -36,7 +40,7 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             # not just a nearby heading mention.
             if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) or "cv" not in placeholders:
                 reject_reason = "hallucinated_candidate_own_cv"
-                logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+                _log_rejection(field, reject_reason)
                 continue
 
         rc = field.get("render_contract") or {}
@@ -46,7 +50,7 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             for bid in source_ids
             if blocks[bid].get("placeholder_text")
         }
-        if placeholder_tokens and not str(token).upper().startswith("MERGEFIELD"):
+        if placeholder_tokens and not str(token).upper().startswith("MERGEFIELD") and field.get("field_type") != "array_object":
             # Layout evidence is the source of truth. If all blocks agree on the same placeholder,
             # normalize the manifest token and render anchor to that placeholder.
             if len(placeholder_tokens) == 1:
@@ -57,13 +61,13 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
                 field["render_contract"] = rc
             elif token and token not in placeholder_tokens:
                 reject_reason = "token_not_supported_by_source_blocks"
-                logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+                _log_rejection(field, reject_reason)
                 continue
 
         template_evidence = field.get("template_evidence") or {}
         if not template_evidence:
             reject_reason = "missing_template_evidence"
-            logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+            _log_rejection(field, reject_reason)
             continue
         template_evidence.setdefault("section_heading", blocks[source_ids[0]].get("section_heading"))
         template_evidence.setdefault("label_text", blocks[source_ids[0]].get("label_text"))
@@ -95,7 +99,7 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             used_blocks[bid] = field.get("name")
 
         if field_invalid:
-            logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+            _log_rejection(field, reject_reason or "field_invalid")
             continue
 
         if str(field.get("name") or "").strip().lower() == "candidate_own_cv":
@@ -105,13 +109,21 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         token_str = str(token).strip()
         if token_str.startswith("[") and token_str.endswith("]") and token_str not in placeholder_tokens:
             continue
-        if template_evidence.get("placeholder_text") and field.get("template_token") and template_evidence.get("placeholder_text") != field.get("template_token"):
+        if field.get("field_type") != "array_object" and template_evidence.get("placeholder_text") and field.get("template_token") and template_evidence.get("placeholder_text") != field.get("template_token"):
             continue
         if field.get("template_token") == "[Type text]" and not (rc.get("occurrence_selector") or {}).get("source_block_id"):
             continue
         sub_fields = field.get("sub_fields")
         if isinstance(sub_fields, list):
             kept = [sf for sf in sub_fields if sf.get("template_token") and sf.get("name")]
+            if field.get("field_type") == "array_object":
+                field["sub_fields"] = kept
+                if not kept:
+                    reject_reason = "array_object_without_sub_fields"
+                    _log_rejection(field, reject_reason)
+                    continue
+                valid.append(field)
+                continue
             # Generic evidence-based pruning: keep only sub-field tokens that are
             # actually evidenced by the parent field source blocks.
             source_placeholders = {
@@ -119,16 +131,22 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
                 for bid in source_ids
                 if blocks[bid].get("placeholder_text")
             }
-            if source_placeholders:
+            placeholder_tokens = {
+                str(t).strip().lower()
+                for t in (field.get("template_evidence") or {}).get("placeholder_tokens", [])
+                if str(t).strip()
+            }
+            supported_tokens = source_placeholders | placeholder_tokens
+            if supported_tokens:
                 kept = [
                     sf
                     for sf in kept
-                    if str(sf.get("template_token") or "").strip().lower() in source_placeholders
+                    if str(sf.get("template_token") or "").strip().lower() in supported_tokens
                 ]
             field["sub_fields"] = kept
             if field.get("field_type") == "array_object" and not kept:
                 reject_reason = "array_object_without_sub_fields"
-                logger.info("Rejecting field %s: %s", field.get("name"), reject_reason)
+                _log_rejection(field, reject_reason)
                 continue
 
         valid.append(field)

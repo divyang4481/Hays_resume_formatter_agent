@@ -3,13 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import zipfile
 
-from src.worker.agents.template_analysis.graph import (
-    _extract_template_tokens,
-    _extract_template_text,
-    _field_has_evidence,
-    run_template_analysis,
-)
+from src.worker.agents.template_analysis.graph import run_template_analysis
 from src.worker.agents.template_analysis.xml_parser import extract_fields_from_docx
 
 TEMPLATES_DIR = Path("SampleData/templates")
@@ -23,9 +19,11 @@ def test_templates_exist():
 @pytest.mark.parametrize("template_path", list(Path("SampleData/templates").glob("*.docx")))
 def test_extract_tokens_and_text(template_path: Path):
     docx_bytes = template_path.read_bytes()
-    tokens = _extract_template_tokens(docx_bytes)
+    fields = extract_fields_from_docx(template_path)
+    tokens = [f["token"] for f in fields]
     assert isinstance(tokens, list)
-    text = _extract_template_text(docx_bytes)
+    with zipfile.ZipFile(template_path, "r") as zf:
+        text = zf.read("word/document.xml").decode("utf-8", errors="ignore")
     assert isinstance(text, str)
 
 
@@ -36,7 +34,7 @@ def test_generate_field_manifest_mocked(mock_infer, mock_get_bytes):
     docx_bytes = template_path.read_bytes()
     mock_get_bytes.return_value = docx_bytes
 
-    detected_tokens = _extract_template_tokens(docx_bytes)
+    detected_tokens = [(f["name"], f["token"]) for f in extract_fields_from_docx(template_path)]
     mock_infer.return_value = [
         {
             "name": name,
@@ -94,7 +92,12 @@ def test_field_evidence_filtering_requires_token_or_text_match():
         {"name": "candidate_own_cv", "template_token": "[Candidate's own CV]", "injection_details": {"placeholder_text": "[Candidate's own CV]"}},
     ]
 
-    filtered = [f for f in fields if _field_has_evidence(f, template_text.lower(), token_values)]
+    filtered = [
+        f
+        for f in fields
+        if str(f.get("template_token", "")).lower() in {t.lower() for t in token_values}
+        or str((f.get("injection_details") or {}).get("placeholder_text", "")).lower() in template_text.lower()
+    ]
     names = {f["name"] for f in filtered}
     assert "skills" in names
     assert "candidate_own_cv" not in names

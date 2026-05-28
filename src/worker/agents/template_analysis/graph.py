@@ -79,7 +79,7 @@ def _group_validate_and_critic(state: TemplateAnalysisState) -> TemplateAnalysis
     validated = validate_manifest_fields_against_layout(
         grouped, {"blocks": state["layout"].get("canonical_blocks", [])}
     )
-    critic = critique_manifest({"fields": validated})
+    critic = critique_manifest({"fields": validated, "layout": state.get("layout", {})})
     duplicate_count = len(validated) - len({f.get("name") for f in validated})
     repeat_groups_count = len([f for f in validated if f.get("field_type") == "array_object"])
     logger.info("[TemplateAnalysis] raw_candidates_count=%s", len(raw))
