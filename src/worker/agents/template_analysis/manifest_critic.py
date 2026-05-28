@@ -40,11 +40,6 @@ def critique_manifest(manifest: dict) -> dict:
         if name == str(field.get("template_token") or "").strip().lower():
             issues.append({"severity": "warning", "code": "RAW_FIELD_NAME", "field": name})
 
-    lower_names = {str(n).lower() for n in names}
-    for required in ("work_experience", "education"):
-        if required not in lower_names:
-            issues.append({"severity": "error", "code": "MISSING_GROUPED_SECTION", "section": required.upper()})
-
     # Dynamic repeat evidence check: if section has 2+ unique placeholder tokens repeated >1 across blocks,
     # require an array_object grouped field for that section.
     canonical_blocks = evidence.get("canonical_blocks", [])
@@ -60,6 +55,15 @@ def critique_manifest(manifest: dict) -> dict:
         repeated_tokens = [t for t, c in counts.items() if c > 1]
         if len(set(placeholders)) >= 2 and len(repeated_tokens) >= 2 and section.strip().lower() not in grouped_sections:
             issues.append({"severity": "error", "code": "MISSING_REPEAT_SECTION", "section": section})
+    # TableStart/TableEnd evidence should map to a grouped array_object section.
+    table_regions: set[str] = set()
+    for b in canonical_blocks:
+        raw = str(b.get("raw_token") or "")
+        if raw.upper().startswith("MERGEFIELD TABLESTART:"):
+            table_regions.add(raw.split(":", 1)[1].strip().lower())
+    for region in table_regions:
+        if region not in lower_names:
+            issues.append({"severity": "error", "code": "MISSING_GROUPED_SECTION", "section": region.upper()})
 
     error_count = sum(1 for i in issues if i.get("severity") == "error")
     warning_count = sum(1 for i in issues if i.get("severity") == "warning")
