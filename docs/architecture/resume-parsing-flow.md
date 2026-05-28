@@ -20,22 +20,24 @@ sequenceDiagram
     participant LLM as Bedrock LLM
     participant S3 as Object Store
 
-    Note over API,S3: Template Analysis Path
+    Note over API,S3: Template Analysis Path (Deterministic Layout-Driven v2)
     API->>Repo: create job (template analysis)
     API->>Q: push template-analysis message
     W->>Q: pop message
     W->>Repo: update job=PROCESSING
     W->>TA: run_template_analysis(template_id, name, object_key)
     TA->>S3: get template DOCX bytes
-    TA->>TA: extract tokens + template text + XML injection map
-    TA->>LLM: infer_template_manifest_fields(template_name, tokens, template_text)
-    LLM-->>TA: inferred fields JSON
-    TA->>TA: normalize + evidence filter + XML-backed merge
+    TA->>TA: extract multi-source evidence (OpenXML, python-docx, Docling, Visual)
+    TA->>TA: reconcile evidence into canonical layout blocks
+    TA->>TA: build trace-level candidates from layout blocks
+    TA->>TA: group candidates into logical sections (work_exp, edu, etc.)
+    TA->>TA: validate manifest fields against layout blocks
+    TA->>TA: critique manifest (passed/failed, score, issues list)
     TA-->>W: GraphResult(COMPLETED, manifest)
     W->>Repo: save manifest
     W->>Repo: update job=COMPLETED
 
-    Note over API,S3: Resume Formatting Path
+    Note over API,S3: Resume Formatting Path (Agentic LLM-Driven v2)
     API->>Repo: create job (resume format)
     API->>Q: push resume-format message
     W->>Q: pop message
@@ -49,6 +51,7 @@ sequenceDiagram
     else template_id present
       RF->>Repo: get manifest(template_id)
       RF->>LLM: extract_resume_fields(fields, resume_text)
+      Note over LLM: Prompt inputs: manifest fields (JSON), resume_text
       LLM-->>RF: field_mappings JSON
       RF->>RF: build filled render payload
       RF->>Repo: get template metadata
@@ -66,15 +69,18 @@ sequenceDiagram
 
 Main code path: `src/worker/agents/template_analysis/graph.py`.
 
-1. Load template bytes from object storage.
-2. Extract candidate tokens from DOCX XML/text (`MERGEFIELD`, `MACROBUTTON`, bracket placeholders, handlebars, etc.).
-3. Build `injection_details` map from XML for deterministic render anchors.
-4. Run XML parser (`xml_parser.extract_fields_from_docx`) for structural signals.
-5. Call LLM to infer manifest fields.
-6. Normalize inferred fields, attach contracts and injection details.
-7. Evidence filter removes unsupported inferred fields.
-8. Deterministic merge appends missing XML-backed fields that still have evidence.
-9. Return manifest payload (`manifest_schema: template_manifest_v2`).
+1. **Load Template Bytes:** Retrieves raw template bytes from S3 Object Store.
+2. **Extract Evidence:** Performs multi-source layout extraction:
+   - **OpenXML Extraction:** Scans raw DOCX XML structure to extract precise `MERGEFIELD`, `MACROBUTTON`, and structural table properties (`extract_openxml_evidence`).
+   - **python-docx Extraction:** Extracts text layout, list items, and paragraph properties (`extract_python_docx_evidence`).
+   - **Docling Extraction:** Identifies flow layout blocks, logical document tables, and headings (`extract_docling_layout_evidence`).
+   - **Visual Extraction:** Employs bounding-box and optical layout alignment signals (`extract_visual_layout_evidence`).
+3. **Reconcile Evidence:** Aggregates and reconciles the extracted multi-source layout evidence into canonical document layout blocks (`reconcile_template_evidence`).
+4. **Build Candidates:** Builds trace-level field candidates from the layout blocks (slugging labels, inferring strategies and types block-by-block) (`build_field_candidates_from_evidence`).
+5. **Group Logical Fields:** Groups candidates deterministically into logical structures such as `work_experience`, `education`, `key_skills`, and other metadata based on recurring placeholder anchors and section headings (`group_logical_fields_from_candidates`).
+6. **Validate Fields:** Validates fields and occurrence keys against visual/OpenXML layout blocks to prevent token mismatches (`validate_manifest_fields_against_layout`).
+7. **Critique Manifest:** Evaluates the manifest fields against layout rules, detecting duplicates or ungrouped blocks, and outputs a final quality score (`critique_manifest`).
+8. **Save Manifest:** Saves the generated manifest (`version: 2`, `manifest_schema: template_manifest_v2`) to the database repository.
 
 ---
 
@@ -85,48 +91,56 @@ Main code path: `src/worker/agents/resume_formatter/graph.py`.
 1. Load resume input (`resume_text` or extract from `resume_object_key`).
 2. If `template_id` missing, suggest templates and pause with `WAITING_FOR_TEMPLATE_SELECTION`.
 3. Load template manifest for selected template.
-4. Call LLM to map resume text to manifest fields.
+4. **Call LLM:** Maps unstructured resume text directly to template manifest fields using Bedrock LLM (`LLMClient.extract_resume_fields`).
 5. Build deterministic render payload (`build_filled_template_payload`).
 6. Inject payload into DOCX template (`inject_render_payload_into_docx`).
 7. Return rendered bytes + filled manifest metadata.
 
 ---
 
-## 4) What we send to LLM
+## 4) Where we use LLM & Prompt Inputs
 
-### A) Template analysis LLM call (2-step plan pattern)
+The system utilizes Bedrock LLM across three interfaces (one core production flow, and two layout planning / standardizing interfaces):
 
-From `LLMClient.infer_template_fields`:
+### A) Resume Field Extraction (Core Production Flow)
 
-- **Step 1: layout planner**
-  - `template_name`
-  - `tokens_json`: JSON array of `{name, template_token}`
-  - `template_text_preview`: first 6000 chars of extracted template text
-  - prompt templates:
-    - `template_analysis/layout_planner_system.j2`
-    - `template_analysis/layout_planner_user.j2`
+Used in the **Resume Formatting** path to map raw candidate resumes to the template's target schema.
 
-- **Step 2: strict manifest generation**
-  - `template_name`
-  - `layout_plan` (Step-1 output)
-  - `tokens_json`
-  - `template_text_preview`
-  - prompt templates:
-    - `template_analysis/template_analysis_system.j2`
-    - `template_analysis/template_analysis_user.j2`
+* **Method:** `LLMClient.extract_resume_fields`
+* **Prompt Inputs:**
+  - `fields_json`: A JSON array representing the template's schema manifest fields (with names, types, expected values, display labels, formatting/source hints, and render contracts).
+  - `resume_text`: The full unstructured plain text of the candidate's CV/resume.
+* **Prompt Templates:** Located in `src/worker/agents/resume_extraction/prompts/` (e.g. system/user instructions for mapping).
+* **Expected Response Shape:**
+  - Direct JSON mapping containing either `{"field_mappings": { "<field_name>": { "value": <extracted_value>, "confidence": <float>, "status": "mapped" } } }` or a fallback `{"extracted": { "<field_name>": <value> }}` structure which is normalized programmatically.
 
-Expected response shape: JSON with top-level `fields` list.
+### B) Dynamic Manifest Standardization (Agentic / CLI Path)
 
-### B) Resume extraction LLM call
+Used as an optional planner to standardise candidates and logical grouping dynamically from evidence when desired.
 
-From `LLMClient.extract_resume_fields`:
+* **Method:** `LLMClient.plan_manifest_from_evidence`
+* **Prompt Inputs:**
+  - `template_name`: The filename of the target resume template.
+  - `candidates_json`: A structured JSON string representing parsed layout blocks and candidate fields (suggested name, display label, field type, template token, source block IDs, and evidence).
+* **Prompt Templates:**
+  - `src/worker/agents/template_analysis/prompts/plan_manifest_system.j2` (defines general mapping rules for presenter fields, CV comments, key skills, and repeat sections without any hardcoding).
+  - `src/worker/agents/template_analysis/prompts/plan_manifest_user.j2` (formats the template context and candidates for processing).
+* **Expected Response Shape:**
+  - A strict JSON payload with a top-level `fields` list matching the standardized names and types.
 
-- `fields_json`: full manifest fields array (includes contracts and hints)
-- `resume_text`: full extracted/plain resume text
-- namespace: `resume_extraction`
-- expected response:
-  - preferred: `{"field_mappings": { ... }}`
-  - fallback supported: `{"extracted": { ... }}` (adapter converts to `field_mappings`)
+### C) Layout Reconstruct & Manifest Generation (Legacy / Alternative Pipeline)
+
+An alternative/CLI pipeline pattern to plan document layout structure and generate templates.
+
+* **Method:** `LLMClient.infer_template_fields` (2-step agentic call pattern)
+* **Step 1: Layout Planner:**
+  - **Inputs:** `template_name`, `tokens_json` (detected merge fields/placeholders), `template_text_preview` (first 6000 characters of template text).
+  - **Templates:** `layout_planner_system.j2`, `layout_planner_user.j2`.
+  - **Output:** A structured Markdown document outline/layout plan.
+* **Step 2: Manifest Generation:**
+  - **Inputs:** `template_name`, `layout_plan` (from Step 1), `tokens_json`, `template_text_preview`.
+  - **Templates:** `template_analysis_system.j2`, `template_analysis_user.j2`.
+  - **Output:** Strict JSON containing the inferred template schema fields.
 
 ---
 
@@ -141,11 +155,11 @@ From `LLMClient.extract_resume_fields`:
 
 ## 6) Notes on non-hardcoded capture behavior
 
-The current pipeline avoids template-specific hardcoding by combining:
-- generic token scanning,
-- XML-based structural extraction,
-- LLM semantic grouping,
-- post-LLM evidence filtering,
-- deterministic XML-backed field merge.
+The current template analysis pipeline is completely free of template-specific hardcoding. It combines:
+1. **Generic multi-source token scanning** (XML/OpenXML, python-docx, Docling, visual).
+2. **Reconciliation** of redundant or adjacent tokens into canonical, atomic layout blocks.
+3. **Trace-level candidate construction** that links blocks dynamically to database properties.
+4. **Deterministic logical grouping** (`group_logical_fields_from_candidates`) that dynamically identifies repeat blocks (like work experience and education) and arrays (like key skills) from layout cues.
+5. **Structural validation and critiques** that enforce robust constraints across the manifest before saving.
 
-This keeps capture flexible for new templates while still preserving placeholders that are clearly present in source DOCX markup.
+This architecture ensures high capture accuracy for new custom formats and templates without requiring any hardcoded lists or rules in the production codebase.
