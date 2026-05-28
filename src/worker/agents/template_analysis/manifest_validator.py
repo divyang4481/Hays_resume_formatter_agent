@@ -73,6 +73,12 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         template_evidence.setdefault("label_text", blocks[source_ids[0]].get("label_text"))
         template_evidence.setdefault("placeholder_text", blocks[source_ids[0]].get("placeholder_text"))
         template_evidence.setdefault("evidence_text", blocks[source_ids[0]].get("evidence_text"))
+
+        template_evidence.setdefault("region_type", blocks[source_ids[0]].get("region_type"))
+        template_evidence.setdefault("block_role", blocks[source_ids[0]].get("block_role"))
+        template_evidence.setdefault("table_index", blocks[source_ids[0]].get("table_index"))
+        template_evidence.setdefault("row_index", blocks[source_ids[0]].get("row_index"))
+        template_evidence.setdefault("cell_index", blocks[source_ids[0]].get("cell_index"))
         field["template_evidence"] = template_evidence
 
         field_invalid = False

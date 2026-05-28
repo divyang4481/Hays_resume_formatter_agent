@@ -22,6 +22,9 @@ def reconcile_template_evidence(openxml: dict, python_docx: dict, docling: dict 
                 "placeholder_text": src.get("placeholder_text"), "mergefield_name": src.get("mergefield_name"), "raw_token": token,
                 "is_real_replacement_target": True, "container_type": src.get("container_type", "paragraph"), "table_index": src.get("table_index"),
                 "row_index": src.get("row_index"), "cell_index": src.get("cell_index"), "is_bullet": src.get("is_bullet", False),
+                "region_type": src.get("region_type"), "block_role": src.get("block_role"),
+                "value_text": src.get("value_text"), "row_text": src.get("row_text"), "cell_text": src.get("cell_text"),
+                "left_cell_text": src.get("left_cell_text"), "right_cell_text": src.get("right_cell_text"),
                 "occurrence_key": f"{loc}:{label}:{token}:{idx}", "evidence_text": src.get("evidence_text", token), "confidence": 0.95 if src.get("source") == "openxml" else 0.8,
             })
     return {"canonical_blocks": canonical, "repeat_groups": [], "source_diagnostics": {"openxml": len(ox), "python_docx": len(pd)}, "warnings": (docling or {}).get("warnings", []) + (visual or {}).get("warnings", [])}

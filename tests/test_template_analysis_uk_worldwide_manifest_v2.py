@@ -34,6 +34,17 @@ def test_template_analysis_uk_worldwide_manifest_v2():
     assert "candidate_own_cv" not in field_names
     assert "interests_and_activities" in field_names
 
+    for name in [
+        "presenter_name",
+        "presenter_title",
+        "presenter_specialist_area",
+        "presenter_phone",
+        "presenter_email",
+    ]:
+        evidence = find_field(fields, name)["template_evidence"]
+        assert evidence.get("region_type") == "presenter_footer"
+        assert (evidence.get("section_heading") or "").lower() not in {"skills", "key skills"}
+
     work = find_field(fields, "work_experience")
     assert work["field_type"] == "array_object"
     assert len(work["sub_fields"]) == 3
