@@ -117,6 +117,26 @@ def extract_layout_blocks_from_docx(docx_bytes: bytes) -> dict:
 from pathlib import Path
 import tempfile
 from src.worker.agents.template_analysis.xml_parser import extract_fields_from_docx
+from src.worker.agents.template_analysis.logical_field_grouper import normalize_mergefield_name
+
+def _infer_region(ev: dict, fld: dict) -> tuple[str|None,str|None,str|None]:
+    token = str(fld.get("token") or "")
+    label = str(ev.get("label_text") or fld.get("source_hint") or "")
+    heading = str(ev.get("section_heading") or "")
+    lower_heading = heading.strip().lower()
+    normalized_name = normalize_mergefield_name(token, label)
+    if normalized_name.startswith("presenter_"):
+        return ("presenter_footer", "presenter_metadata", "PRESENTER")
+
+    if ev.get("table_index") is not None and ev.get("row_index") is not None and ev.get("cell_index") is not None and label:
+        if lower_heading in {"skills", "key skills", "professional qualifications"}:
+            heading = ""
+        return ("label_value_table", "label_value_pair", heading or None)
+
+    if str(ev.get("block_type") or "") == "bullet_placeholder":
+        return ("bullet_list_section", "list_item_placeholder", heading or None)
+
+    return (None, None, heading or None)
 
 # fallback extractor for fld codes
 def _extract_from_xml_fields(docx_bytes: bytes):
@@ -130,23 +150,32 @@ def _extract_from_xml_fields(docx_bytes: bytes):
     blocks=[]
     for i, fld in enumerate(fields, start=1):
         ev=fld.get("template_evidence") or {}
+        region_type, block_role, section_heading = _infer_region(ev, fld)
         blocks.append({
             "block_id": ev.get("block_id", f"b{i:03d}"),
             "location": "body",
             "xml_file": "word/document.xml",
             "container_type": "paragraph",
-            "section_heading": ev.get("section_heading", ""),
+            "section_heading": section_heading or "",
             "label_text": ev.get("label_text", fld.get("source_hint","")),
             "placeholder_text": ev.get("placeholder_text") or fld.get("token"),
             "mergefield_name": None,
             "raw_token": fld.get("token"),
             "paragraph_text": ev.get("label_text", ""),
-            "table_index": None,"row_index": None,"cell_index": None,"paragraph_index": None,
+            "value_text": ev.get("cell_text") or fld.get("token"),
+            "row_text": ev.get("row_text", ""),
+            "cell_text": ev.get("cell_text", ""),
+            "left_cell_text": ev.get("left_cell_text"),
+            "right_cell_text": ev.get("right_cell_text"),
+            "table_index": ev.get("table_index"),"row_index": ev.get("row_index"),"cell_index": ev.get("cell_index"),"paragraph_index": None,
             "is_bullet": bool((fld.get("context") or {}).get("is_bullet")),
             "is_heading": False,
             "occurrence_index": ev.get("occurrence_index", i),
             "order_index": i,
             "style_name": ((fld.get("context") or {}).get("style") or ""),
+            "region_type": region_type,
+            "block_role": block_role,
+            "layout_context": {"heading": ev.get("section_heading", ""), "block_type": ev.get("block_type", "")},
             "evidence_text": ev.get("label_text") or fld.get("source_hint", ""),
         })
     return {"blocks": blocks, "repeat_groups": []}

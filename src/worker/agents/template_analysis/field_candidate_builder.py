@@ -49,6 +49,11 @@ def build_field_candidates_from_evidence(layout: dict) -> list[dict]:
                 "label_text": block.get("label_text"),
                 "placeholder_text": block.get("placeholder_text"),
                 "evidence_text": block.get("evidence_text"),
+                "region_type": block.get("region_type"),
+                "block_role": block.get("block_role"),
+                "table_index": block.get("table_index"),
+                "row_index": block.get("row_index"),
+                "cell_index": block.get("cell_index"),
             },
             "render_contract": {
                 "render_strategy": _infer_render_strategy(token, field_type),
