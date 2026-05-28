@@ -83,7 +83,6 @@ def group_blocks_by_section(layout: dict) -> dict[str, list[dict]]:
         grouped[section].append(block)
     return grouped
 
-
 def _is_bullet_token(token: str) -> bool:
     t = token.lower()
     return "bullet" in t or "list" in t
@@ -232,33 +231,37 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
         remaining.append(field)
     merged = remaining
 
-    by_section: dict[str, list[dict]] = defaultdict(list)
+    by_section: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for field in merged:
-        sec = ((field.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
-        by_section[sec].append(field)
+        ev = field.get("template_evidence") or {}
+        region = (ev.get("region_type") or "").strip().lower()
+        sec = (ev.get("section_heading") or "").strip().lower()
+        key = ("label_value_table", sec) if region == "label_value_table" else ("", sec)
+        by_section[key].append(field)
 
     logical: list[dict] = []
-    for section, sec_fields in by_section.items():
-        repeat = _build_repeat_section_field(section, sec_fields)
+    for (region, section), sec_fields in by_section.items():
+        repeat_section_key = section or region
+        repeat = _build_repeat_section_field(repeat_section_key, sec_fields)
         if repeat:
             logical.append(repeat)
             continue
 
         if len(sec_fields) > 1:
-            sec_name = canonicalize_field_name(section)
+            sec_name = canonicalize_field_name(section or region)
             if sec_name in {"education", "certifications", "training", "projects", "publications"}:
                 sub_fields = []
                 for f in sec_fields:
                     tok = str(f.get("template_token") or "")
                     sub_fields.append({"name": canonicalize_field_name(tok or f.get("name") or "field"), "field_type": "array" if _is_bullet_token(tok) else "scalar", "template_token": tok})
-                logical.append({"name": sec_name, "display_label": section.upper(), "field_type": "array_object", "template_token": sub_fields[0]["template_token"] if sub_fields else "", "source_block_ids": sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])}), "sub_fields": sub_fields, "template_evidence": {"section_heading": section.upper()}, "render_contract": {"render_strategy": "repeat_block", "anchor_token": sub_fields[0]["template_token"] if sub_fields else "", "block_tokens": {sf["name"]: sf["template_token"] for sf in sub_fields}}, "source_classification": "resume_fact"})
+                logical.append({"name": sec_name, "display_label": (section or region).upper(), "field_type": "array_object", "template_token": sub_fields[0]["template_token"] if sub_fields else "", "source_block_ids": sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])}), "sub_fields": sub_fields, "template_evidence": {"section_heading": (section or region).upper()}, "render_contract": {"render_strategy": "repeat_block", "anchor_token": sub_fields[0]["template_token"] if sub_fields else "", "block_tokens": {sf["name"]: sf["template_token"] for sf in sub_fields}}, "source_classification": "resume_fact"})
                 continue
             token_counts = Counter(str(f.get("template_token") or "") for f in sec_fields)
             if len(token_counts) == 1:
                 f0 = deepcopy(sec_fields[0])
                 f0["field_type"] = "array" if _is_bullet_token(f0.get("template_token") or "") else f0.get("field_type", "scalar")
                 f0.setdefault("render_contract", {})["render_strategy"] = "bullet_list_replace" if f0["field_type"] == "array" else "placeholder_replace"
-                f0["name"] = canonicalize_field_name(section or f0.get("name") or "field")
+                f0["name"] = canonicalize_field_name(section or region or f0.get("name") or "field")
                 f0["source_block_ids"] = sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])})
                 logical.append(f0)
                 continue

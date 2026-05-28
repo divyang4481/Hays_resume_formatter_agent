@@ -48,7 +48,7 @@ def _resolve_generic_placeholder_name(raw_placeholder: str, source_hint: str, he
     return candidate
 
 
-def _find_table_row_label(p: ET.Element, ns: dict, parent_map: dict) -> str | None:
+def _get_table_context(p: ET.Element, ns: dict, parent_map: dict) -> dict[str, Any]:
     curr = p
     cell = None
     while curr in parent_map:
@@ -57,22 +57,40 @@ def _find_table_row_label(p: ET.Element, ns: dict, parent_map: dict) -> str | No
             cell = curr
             break
             
+    ctx: dict[str, Any] = {"table_index": None, "row_index": None, "cell_index": None, "label_text": None, "row_text": "", "cell_text": "", "left_cell_text": None, "right_cell_text": None}
     if cell is not None:
         row = parent_map.get(cell)
         if row is not None and row.tag == f"{{{ns['w']}}}tr":
+            table = parent_map.get(row)
             cells = row.findall(f"{{{ns['w']}}}tc", ns)
+            rows_in_table = table.findall(f"{{{ns['w']}}}tr", ns) if table is not None else []
+            if rows_in_table and row in rows_in_table:
+                ctx["row_index"] = rows_in_table.index(row)
             try:
                 cell_idx = cells.index(cell)
             except ValueError:
                 cell_idx = -1
-                
+            ctx["cell_index"] = cell_idx if cell_idx >= 0 else None
+            cell_texts = [t.text or "" for t in cell.findall(f".//{{{ns['w']}}}t", ns)]
+            ctx["cell_text"] = "".join(cell_texts).strip()
+            ctx["row_text"] = " ".join("".join((t.text or "") for t in c.findall(f".//{{{ns['w']}}}t", ns)).strip() for c in cells).strip()
+            if table is not None and table.tag == f"{{{ns['w']}}}tbl":
+                body = parent_map.get(table)
+                if body is not None:
+                    tables = [c for c in list(body) if c.tag == f"{{{ns['w']}}}tbl"]
+                    if table in tables:
+                        ctx["table_index"] = tables.index(table)
             if cell_idx > 0:
                 left_cell = cells[cell_idx - 1]
                 left_texts = [t.text or "" for t in left_cell.findall(f".//{{{ns['w']}}}t", ns)]
                 label_text = "".join(left_texts).strip()
                 if label_text:
-                    return label_text
-    return None
+                    ctx["label_text"] = label_text
+                    ctx["left_cell_text"] = label_text
+            if len(cells) > 1:
+                right_text = "".join((t.text or "") for t in cells[1].findall(f".//{{{ns['w']}}}t", ns)).strip()
+                ctx["right_cell_text"] = right_text
+    return ctx
 
 
 def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
@@ -91,7 +109,7 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
     block_counter = 0
     current_heading = ""
 
-    def next_block(placeholder_text: str, label: str, style: str, is_bullet: bool) -> dict[str, Any]:
+    def next_block(placeholder_text: str, label: str, style: str, is_bullet: bool, table_ctx: dict[str, Any]) -> dict[str, Any]:
         nonlocal block_counter
         block_counter += 1
         placeholder_occurrence[placeholder_text] = placeholder_occurrence.get(placeholder_text, 0) + 1
@@ -103,6 +121,13 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
             "occurrence_index": placeholder_occurrence[placeholder_text],
             "block_type": "bullet_placeholder" if is_bullet else "label_value_row",
             "location": {"style": style, "is_bullet": is_bullet},
+            "table_index": table_ctx.get("table_index"),
+            "row_index": table_ctx.get("row_index"),
+            "cell_index": table_ctx.get("cell_index"),
+            "row_text": table_ctx.get("row_text"),
+            "cell_text": table_ctx.get("cell_text"),
+            "left_cell_text": table_ctx.get("left_cell_text"),
+            "right_cell_text": table_ctx.get("right_cell_text"),
         }
 
     for p in root.findall('.//w:p', ns):
@@ -115,7 +140,8 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
         if paragraph_text and ("heading" in style_val or "title" in style_val or paragraph_text.isupper()):
             current_heading = paragraph_text
 
-        table_label = _find_table_row_label(p, ns, parent_map)
+        table_ctx = _get_table_context(p, ns, parent_map)
+        table_label = table_ctx.get("label_text")
         source_hint = table_label or paragraph_text or current_heading
 
         for fld in p.findall('.//w:fldSimple', ns):
@@ -124,7 +150,7 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
             if not mf:
                 continue
             base_name = _clean_field_name(mf)
-            block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet)
+            block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet, table_ctx)
             fields.append({"name": base_name, "type": "scalar", "required": True, "source_hint": source_hint,
                           "token": f"MERGEFIELD {mf}", "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
                           "source_block_ids": [block["block_id"]], "template_evidence": block})
@@ -137,7 +163,7 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
             mf = _extract_mergefield_name(instr_text)
             if mf:
                 base_name = _clean_field_name(mf)
-                block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet)
+                block = next_block(f"MERGEFIELD {mf}", source_hint, style_val, is_bullet, table_ctx)
                 fields.append({"name": base_name, "type": "scalar", "required": True, "source_hint": source_hint,
                               "token": f"MERGEFIELD {mf}", "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
                               "source_block_ids": [block["block_id"]], "template_evidence": block})
@@ -156,7 +182,7 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
             token_name = f"{base_name}_item" if is_bullet else base_name
             counts_by_name[token_name] = counts_by_name.get(token_name, 0) + 1
             final_name = token_name if counts_by_name[token_name] == 1 else f"{token_name}_{counts_by_name[token_name]}"
-            block = next_block(f"[{raw_placeholder}]", source_hint, style_val, is_bullet)
+            block = next_block(f"[{raw_placeholder}]", source_hint, style_val, is_bullet, table_ctx)
             fields.append({"name": final_name, "type": "array" if is_bullet else "scalar", "required": True,
                           "source_hint": source_hint, "token": instr_text,
                           "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},

@@ -56,6 +56,7 @@ def critique_manifest(manifest: dict) -> dict:
         if len(set(placeholders)) >= 2 and len(repeated_tokens) >= 2 and section.strip().lower() not in grouped_sections:
             issues.append({"severity": "error", "code": "MISSING_REPEAT_SECTION", "section": section})
     # TableStart/TableEnd evidence should map to a grouped array_object section.
+    lower_names = {str(f.get("name") or "").strip().lower() for f in fields}
     table_regions: set[str] = set()
     for b in canonical_blocks:
         raw = str(b.get("raw_token") or "")
@@ -64,6 +65,33 @@ def critique_manifest(manifest: dict) -> dict:
     for region in table_regions:
         if region not in lower_names:
             issues.append({"severity": "error", "code": "MISSING_GROUPED_SECTION", "section": region.upper()})
+
+    def _looks_like_list_section(section_name: str, known_sections: set[str]) -> bool:
+        s = section_name.strip().lower()
+        if not s:
+            return False
+        if any(k in s for k in ("skill", "qualification", "competenc", "experience", "education", "interest")):
+            return True
+        return s in known_sections
+
+    list_like_sections = {
+        str((f.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+        for f in fields
+        if f.get("field_type") in {"array", "array_object"}
+    }
+    for field in fields:
+        name = str(field.get("name") or "")
+        ev = field.get("template_evidence") or {}
+        section = str(ev.get("section_heading") or "").strip().lower()
+        region = str(ev.get("region_type") or "").strip().lower()
+        if region == "label_value_table" and _looks_like_list_section(section, list_like_sections):
+            issues.append({"severity": "warning", "code": "WRONG_SECTION_CARRYOVER", "field": name, "message": "Label-value field appears incorrectly attached to previous list section."})
+
+        if region == "presenter_footer" and _looks_like_list_section(section, list_like_sections):
+            issues.append({"severity": "warning", "code": "PRESENTER_IN_WRONG_SECTION", "field": name, "message": "Presenter field appears under content section."})
+
+        if region == "label_value_table" and (ev.get("row_index") is None or ev.get("cell_index") is None):
+            issues.append({"severity": "warning", "code": "LABEL_VALUE_WITHOUT_ROW_CONTEXT", "field": name, "message": "Label-value field is missing row/cell context."})
 
     error_count = sum(1 for i in issues if i.get("severity") == "error")
     warning_count = sum(1 for i in issues if i.get("severity") == "warning")
