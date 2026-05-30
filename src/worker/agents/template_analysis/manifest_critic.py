@@ -100,7 +100,7 @@ def critique_manifest(manifest: dict) -> dict:
     # Check for INSTRUCTION_REGION_AS_FIELD
     for field in fields:
         ev = field.get("template_evidence") or {}
-        if ev.get("region_type") == "instruction_region" and ev.get("is_instruction_only"):
+        if ev.get("region_type") == "instruction_region" and ev.get("is_instruction_only") and (field.get("render_contract") or {}).get("render_strategy") != "remove_instruction_text":
             issues.append({"severity": "warning", "code": "INSTRUCTION_REGION_AS_FIELD", "field": field.get("name"), "message": "Instruction region was emitted as a field without content placeholder."})
 
     # Check for WRONG_HEADING_CARRYOVER

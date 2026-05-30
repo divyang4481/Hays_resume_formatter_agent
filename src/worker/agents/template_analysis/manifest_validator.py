@@ -36,9 +36,10 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
         if cv_like_declared:
             joined = " ".join((blocks[bid].get("evidence_text") or "") for bid in source_ids).lower()
             placeholders = " ".join((blocks[bid].get("placeholder_text") or "") for bid in source_ids).lower()
-            # For CV-like fields, require explicit placeholder-level CV evidence,
+            instruction_text = str((field.get("template_evidence") or {}).get("instruction_text") or "").lower()
+            # For CV-like fields, require explicit placeholder-level CV evidence or instruction text,
             # not just a nearby heading mention.
-            if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) or "cv" not in placeholders:
+            if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) and "cv" not in placeholders and not any(x in instruction_text for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]):
                 reject_reason = "hallucinated_candidate_own_cv"
                 _log_rejection(field, reject_reason)
                 continue
