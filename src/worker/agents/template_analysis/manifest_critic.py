@@ -93,6 +93,49 @@ def critique_manifest(manifest: dict) -> dict:
         if region == "label_value_table" and (ev.get("row_index") is None or ev.get("cell_index") is None):
             issues.append({"severity": "warning", "code": "LABEL_VALUE_WITHOUT_ROW_CONTEXT", "field": name, "message": "Label-value field is missing row/cell context."})
 
+
+    # Visual Layout Leak Checks
+    lower_names = {str(f.get("name") or "").strip().lower() for f in fields}
+
+    # Check for INSTRUCTION_REGION_AS_FIELD
+    for field in fields:
+        ev = field.get("template_evidence") or {}
+        if ev.get("region_type") == "instruction_region" and ev.get("is_instruction_only"):
+            issues.append({"severity": "warning", "code": "INSTRUCTION_REGION_AS_FIELD", "field": field.get("name"), "message": "Instruction region was emitted as a field without content placeholder."})
+
+    # Check for WRONG_HEADING_CARRYOVER
+    list_like_sections = {
+        str((f.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+        for f in fields
+        if f.get("field_type") in {"array", "array_object"}
+    }
+
+    def _looks_like_list_section(section_name: str, known_sections: set[str]) -> bool:
+        s = section_name.strip().lower()
+        if not s:
+            return False
+        if any(k in s for k in ("skill", "qualification", "competenc", "experience", "education", "interest")):
+            return True
+        return s in known_sections
+
+    for field in fields:
+        name = str(field.get("name") or "")
+        ev = field.get("template_evidence") or {}
+        section = str(ev.get("section_heading") or "").strip().lower()
+        region = str(ev.get("region_type") or "").strip().lower()
+
+        if region == "label_value_table" and _looks_like_list_section(section, list_like_sections):
+            issues.append({"severity": "warning", "code": "WRONG_HEADING_CARRYOVER", "field": name, "message": "Label-value table field seems incorrectly attached to previous list heading."})
+
+    # The TABLE_REGION_SCALAR_LEAK rule.
+    # If a table region contains CheckType but output exposes only scalar check_type, raise error.
+    # Actually, if we group it properly, it will be array_object. So we just need to ensure no `table_start` tokens are left dangling,
+    # or if we have a table region evidence but the field is not array_object.
+    for field in fields:
+        ev = field.get("template_evidence") or {}
+        if ev.get("region_type") == "mailmerge_table_region" and field.get("field_type") == "scalar":
+             issues.append({"severity": "error", "code": "TABLE_REGION_SCALAR_LEAK", "field": field.get("name"), "message": "Field in mailmerge_table_region exposed as standalone scalar."})
+
     error_count = sum(1 for i in issues if i.get("severity") == "error")
     warning_count = sum(1 for i in issues if i.get("severity") == "warning")
     score = max(0.0, 1 - 0.08 * error_count - 0.02 * warning_count)

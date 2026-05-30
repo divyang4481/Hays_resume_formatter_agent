@@ -5,8 +5,8 @@ Upload a DOCX template file to the API, wait for analysis to complete,
 and print the generated field manifest.
 
 Usage:
-    python tests/run_live_template_analysis.py --template SampleData/templates/UK\ Treasury.docx
-    python tests/run_live_template_analysis.py --template SampleData/templates/UK\ Treasury.docx --host http://localhost:8000
+    python tests/run_live_template_analysis.py --template "SampleData/templates/UK Treasury.docx"
+    python tests/run_live_template_analysis.py --template "SampleData/templates/UK Treasury.docx" --host http://localhost:8000
 """
 from __future__ import annotations
 
@@ -130,8 +130,38 @@ def print_manifest(manifest: dict) -> None:
             sf_token = sf.get('template_token', '')
             print(f"    - {sf_name} ({sf_type}) token: {sf_token}")
     print(f"  manifest version : {manifest.get('version')}")
+
     print(f"  manifest schema  : {manifest.get('manifest_schema')}")
     dbg = manifest.get('debug', {})
+
+    print("\n=== VISUAL DEBUG ARTIFACTS ===")
+    print(f"visual_regions_count={dbg.get('visual_regions_count')}")
+    print(f"visual_tables_count={dbg.get('visual_tables_count')}")
+    print(f"label_value_rows_count={dbg.get('label_value_rows_count')}")
+    print(f"mailmerge_regions_count={dbg.get('mailmerge_regions_count')}")
+    print(f"instruction_regions_count={dbg.get('instruction_regions_count')}")
+
+    print(f"visual_debug_html_path={dbg.get('visual_debug_html_path')}")
+    print(f"raw_visual_tokens_count={dbg.get('raw_visual_tokens_count')}")
+    print(f"manifest_token_count={dbg.get('manifest_token_count')}")
+    print(f"ignored_control_tokens={dbg.get('ignored_control_tokens')}")
+
+
+    print("\n=== FIELDS EXPORTED ===")
+    for f in manifest.get("fields", []):
+        ev = f.get("template_evidence") or {}
+        print(f"name: {f.get('name')}")
+        print(f"  type: {f.get('field_type')}")
+        print(f"  region_type: {ev.get('region_type')}")
+        print(f"  row_role: {ev.get('row_role')}")
+        print(f"  label: {f.get('display_label')}")
+        print(f"  token: {f.get('template_token')}")
+        print(f"  render_strategy: {(f.get('render_contract') or {}).get('render_strategy')}")
+        print(f"  section_heading: {ev.get('section_heading')}")
+        print("---")
+
+    print(f"  debug.pipeline_version : {dbg.get('pipeline_version')}")
+
     print(f"  debug.pipeline_version : {dbg.get('pipeline_version')}")
     print(f"  blocks_count     : {dbg.get('blocks_count', manifest.get('layout',{}).get('blocks_count'))}")
     print(f"  raw_candidates_count : {dbg.get('raw_candidates_count')}")
