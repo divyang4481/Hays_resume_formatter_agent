@@ -99,15 +99,20 @@ def build_visual_field_candidates(visual_model: VisualModel) -> List[Dict[str, A
                                     candidates.append(candidate)
 
         elif region.region_type == "instruction_region" and region.is_instruction_only:
-            # Create a placeholder candidate for the LLM to identify the instruction region
-            # We don't hardcode candidate_own_cv here. The LLM or fallback logic will use this candidate.
             instruction_text = " ".join([block_map.get(bid).text for bid in region.blocks if block_map.get(bid)])
 
+            name = None
+            token_val = None
+            if region.heading:
+                from src.worker.agents.template_analysis.logical_field_grouper import canonicalize_field_name
+                name = canonicalize_field_name(region.heading)
+                token_val = f"[{region.heading}]"
+
             candidate = {
-                "name": None,
+                "name": name,
                 "display_label": region.heading or "Instruction",
-                "template_token": None,
-                "raw_token": None,
+                "template_token": token_val,
+                "raw_token": token_val,
                 "source_block_ids": region.blocks,
                 "field_type": "scalar",
                 "template_evidence": {

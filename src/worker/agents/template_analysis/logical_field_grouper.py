@@ -15,6 +15,7 @@ def canonicalize_field_name(text: str) -> str:
     cleaned = MERGEFIELD_RE.sub("", (text or "").strip())
     cleaned = re.sub(r"^MACROBUTTON\s+AcceptAllChangesShown\s+", "", cleaned, flags=re.I)
     cleaned = cleaned.strip("[]{}()<>")
+    cleaned = re.sub(r"['’][sS]", "", cleaned)
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", cleaned).strip("_").lower()
     cleaned = re.sub(r"_+", "_", cleaned)
     return cleaned or "field"

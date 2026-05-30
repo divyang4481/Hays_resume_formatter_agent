@@ -20,6 +20,10 @@ def _extract_macro_placeholder(instr_text: str) -> str | None:
         return qt.group(1).strip()
     return None
 
+def _extract_placeholder(text: str) -> str | None:
+    m = re.search(r"\[[^\]]+\]", text or "")
+    return m.group(0).strip() if m else None
+
 def extract_openxml_visual_evidence(docx_bytes: bytes) -> VisualModel:
     zip_ref = zipfile.ZipFile(BytesIO(docx_bytes), "r")
     xml_bytes = zip_ref.read("word/document.xml")
@@ -107,6 +111,16 @@ def extract_openxml_visual_evidence(docx_bytes: bytes) -> VisualModel:
                                     token_kind="macrobutton"
                                 ))
 
+                    if not tokens:
+                        ph = _extract_placeholder(cell_text)
+                        if ph:
+                            tokens.append(VisualToken(
+                                token_id=str(uuid.uuid4()),
+                                raw_token=ph,
+                                public_token=ph,
+                                token_kind="placeholder"
+                            ))
+
                     v_cell = VisualCell(
                         cell_id=cell_id,
                         table_id=table_id,
@@ -173,6 +187,16 @@ def extract_openxml_visual_evidence(docx_bytes: bytes) -> VisualModel:
                             public_token=f"[{raw_placeholder}]",
                             token_kind="macrobutton"
                         ))
+
+            if paragraph_text and not tokens:
+                ph = _extract_placeholder(paragraph_text)
+                if ph:
+                    tokens.append(VisualToken(
+                        token_id=str(uuid.uuid4()),
+                        raw_token=ph,
+                        public_token=ph,
+                        token_kind="placeholder"
+                    ))
 
             if paragraph_text or tokens:
                 p_style = p.find('./w:pPr/w:pStyle', ns)

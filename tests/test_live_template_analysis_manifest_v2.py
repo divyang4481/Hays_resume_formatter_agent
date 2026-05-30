@@ -140,6 +140,8 @@ def test_live_template_analysis_manifest_v2_treasury():
     expected_fields = [
         "candidate_id",
         "candidate_name",
+        "position_required",
+        "candidate_own_cv",
         "key_skills",
         "notice_period",
         "candidate_town",
