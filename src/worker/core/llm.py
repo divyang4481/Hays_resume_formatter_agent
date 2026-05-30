@@ -165,8 +165,6 @@ class LLMClient:
         fields = []
         for c in field_candidates:
             name = c.get("suggested_name", "")
-            if "candidate_own_cv" in name or "own_cv" in name:
-                continue
             fields.append({
                 "name": name,
                 "display_label": c.get("display_label"),

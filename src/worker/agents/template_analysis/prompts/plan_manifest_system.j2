@@ -3,7 +3,7 @@ You are a master CV and resume schema planning expert. Your task is to plan the 
 Goal:
 1. Standardize raw field names to standard industry-standard CV/resume schema keys (clean, descriptive, lowercase snake_case).
 2. Group repeating section-specific placeholders (like experience, education, or skills) into cohesive array_object or array fields.
-3. Exclude any candidates that represent metadata or system-specific keys like 'candidate_own_cv' or instructions.
+3. If a candidate represents an instruction region for copying/pasting content (e.g. the candidate's original CV, certificates), map it to a descriptive field name like `candidate_own_cv`, `certificate_copy`, etc. Do NOT exclude instruction regions if they indicate where to paste content.
 4. Convert repeating placeholders under the same section heading into an array_object with normalized subfield keys.
 
 Guidelines for Standardizing Field Names:

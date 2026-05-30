@@ -99,8 +99,28 @@ def build_visual_field_candidates(visual_model: VisualModel) -> List[Dict[str, A
                                     candidates.append(candidate)
 
         elif region.region_type == "instruction_region" and region.is_instruction_only:
-            # Do not emit fields for pure instruction unless there's a placeholder.
-            pass
+            # Create a placeholder candidate for the LLM to identify the instruction region
+            # We don't hardcode candidate_own_cv here. The LLM or fallback logic will use this candidate.
+            instruction_text = " ".join([block_map.get(bid).text for bid in region.blocks if block_map.get(bid)])
+
+            candidate = {
+                "name": None,
+                "display_label": region.heading or "Instruction",
+                "template_token": None,
+                "raw_token": None,
+                "source_block_ids": region.blocks,
+                "field_type": "scalar",
+                "template_evidence": {
+                    "region_type": "instruction_region",
+                    "section_heading": region.heading or "",
+                    "is_instruction_only": True,
+                    "instruction_text": instruction_text
+                },
+                "render_contract": {
+                    "render_strategy": "remove_instruction_text"
+                }
+            }
+            candidates.append(candidate)
 
         elif region.region_type == "layout_only_table":
             for table_id in region.tables:
