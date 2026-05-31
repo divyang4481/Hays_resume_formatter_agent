@@ -41,7 +41,7 @@
 
         <!-- Main Content Wrapper -->
         <main class="content-wrapper">
-            
+
             <!-- SECTION 1: RESUME AGENT INTERFACE -->
             <section id="tab-agent" class="tab-pane active">
                 <div class="hero-section">
@@ -56,7 +56,7 @@
                             <span class="step-num">1</span>
                             <h3>Upload Candidate CV</h3>
                         </div>
-                        
+
                         <div class="upload-options">
                             <!-- File Upload Area -->
                             <div class="drag-drop-zone" id="cv-drop-zone">
@@ -68,9 +68,9 @@
                                     Browse Files
                                 </button>
                             </div>
-                            
+
                             <div class="divider"><span>OR</span></div>
-                            
+
                             <!-- Raw Text Option -->
                             <div class="text-paste-zone">
                                 <label for="cv-text-input">Paste Candidate CV Text</label>
@@ -130,14 +130,14 @@
                             <span class="node-label">Queued</span>
                         </div>
                         <div class="stage-connector" id="connector-queued"></div>
-                        
+
                         <!-- Processing Stage -->
                         <div class="stage-node" id="stage-processing">
                             <div class="node-icon"><i class="fa-solid fa-gear fa-spin"></i></div>
                             <span class="node-label">Processing</span>
                         </div>
                         <div class="stage-connector" id="connector-processing"></div>
-                        
+
                         <!-- Completed/Failed Stage -->
                         <div class="stage-node" id="stage-completed">
                             <div class="node-icon"><i class="fa-solid fa-check"></i></div>
@@ -169,7 +169,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <!-- Extracted Manifest Values & Download Box -->
                         <div class="result-box hidden" id="result-box">
                             <div class="result-left">
@@ -244,40 +244,120 @@
                     <p>Upload new templates to parse manifests, analyze XML structures and manage field dictionaries.</p>
                 </div>
 
-                <div class="admin-grid">
-                    <!-- Upload Template -->
-                    <div class="glass-card admin-upload-card">
-                        <div class="card-header">
-                            <i class="fa-solid fa-file-word icon-word"></i>
-                            <h3>Upload New Word Template</h3>
-                        </div>
-                        <p class="card-subtitle">Upload corporate templates (.docx) to automatically analyze merge fields, XML styles, and generate the manifest.</p>
-                        
-                        <div class="drag-drop-zone admin-zone" id="template-drop-zone">
-                            <input type="file" id="template-file-input" accept=".docx" class="hidden-input">
-                            <i class="fa-solid fa-file-circle-plus cloud-icon"></i>
-                            <p class="zone-primary-text">Drag & drop DOCX template here</p>
-                            <p class="zone-secondary-text">Only Microsoft Word (.docx) templates are supported</p>
-                            <button class="btn btn-outline" onclick="document.getElementById('template-file-input').click()">
-                                Select Document
-                            </button>
-                        </div>
+                <div class="admin-dashboard-shell">
+                    <div class="admin-rail glass-card">
+                        <button class="admin-rail-btn active" id="admin-view-templates-btn" onclick="switchAdminView('templates')">
+                            <i class="fa-solid fa-layer-group"></i>
+                            <span>Template Listing</span>
+                        </button>
+                        <button class="admin-rail-btn" id="admin-view-upload-btn" onclick="switchAdminView('upload')">
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                            <span>Add New Template</span>
+                        </button>
+                        <button class="admin-rail-btn" id="admin-view-resumes-btn" onclick="switchAdminView('resumes')">
+                            <i class="fa-solid fa-file-arrow-down"></i>
+                            <span>Formatted Resumes</span>
+                        </button>
                     </div>
 
-                    <!-- Template Manifest Management List -->
-                    <div class="glass-card template-manager-card">
-                        <div class="card-header-plain">
-                            <div>
-                                <h3>Template Catalog & Manifest Registry</h3>
-                                <p class="subtitle">Configure and inspect XML-level injection schemas</p>
+                    <div class="admin-workspace">
+                        <div class="admin-view active" id="admin-view-templates">
+                            <div class="glass-card template-manager-card">
+                                <div class="card-header-plain">
+                                    <div>
+                                        <h3>Template Catalog & Manifest Registry</h3>
+                                        <p class="subtitle">List, inspect, and edit template metadata with full manifest visibility.</p>
+                                    </div>
+                                    <button class="btn btn-outline btn-small" onclick="loadAdminTemplates()">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                    </button>
+                                </div>
+
+                                <div class="admin-summary-grid" id="admin-template-summary">
+                                    <div class="stat-pill"><span class="stat-num">-</span><span class="stat-label">Templates</span></div>
+                                    <div class="stat-pill"><span class="stat-num">-</span><span class="stat-label">Manifest Fields</span></div>
+                                    <div class="stat-pill"><span class="stat-num">-</span><span class="stat-label">Ready</span></div>
+                                </div>
+
+                                <div class="template-manager-list" id="admin-template-list">
+                                    <div class="loading-state">
+                                        <i class="fa-solid fa-spinner fa-spin"></i>
+                                        <p>Loading template registry...</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="template-manager-list" id="admin-template-list">
-                            <!-- Populated dynamically by JS -->
-                            <div class="loading-state">
-                                <i class="fa-solid fa-spinner fa-spin"></i>
-                                <p>Loading template registry...</p>
+                        <div class="admin-view" id="admin-view-upload">
+                            <div class="admin-grid compact-admin-grid">
+                                <div class="glass-card admin-upload-card">
+                                    <div class="card-header">
+                                        <i class="fa-solid fa-file-word icon-word"></i>
+                                        <h3>Upload New Word Template</h3>
+                                    </div>
+                                    <p class="card-subtitle">Upload corporate templates (.docx) to automatically analyze merge fields, XML styles, and generate the manifest.</p>
+
+                                    <div class="drag-drop-zone admin-zone" id="template-drop-zone">
+                                        <input type="file" id="template-file-input" accept=".docx" class="hidden-input">
+                                        <i class="fa-solid fa-file-circle-plus cloud-icon"></i>
+                                        <p class="zone-primary-text">Drag & drop DOCX template here</p>
+                                        <p class="zone-secondary-text">Only Microsoft Word (.docx) templates are supported</p>
+                                        <button class="btn btn-outline" onclick="document.getElementById('template-file-input').click()">
+                                            Select Document
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="glass-card upload-progress-card">
+                                    <div class="card-header-plain">
+                                        <div>
+                                            <h3>Template Analysis Progress</h3>
+                                            <p class="subtitle">Track queued uploads until manifests are ready.</p>
+                                        </div>
+                                        <button class="btn btn-outline btn-small" onclick="loadAdminJobs()">
+                                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                        </button>
+                                    </div>
+                                    <div class="upload-progress-list" id="template-upload-progress-list">
+                                        <div class="loading-state">
+                                            <i class="fa-solid fa-spinner fa-spin"></i>
+                                            <p>Loading template analysis jobs...</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="admin-view" id="admin-view-resumes">
+                            <div class="glass-card formatted-resumes-card">
+                                <div class="card-header-plain">
+                                    <div>
+                                        <h3>Resume / Job Download Center</h3>
+                                        <p class="subtitle">Review formatted resume jobs and download completed DOCX output.</p>
+                                    </div>
+                                    <button class="btn btn-outline btn-small" onclick="loadAdminJobs()">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                    </button>
+                                </div>
+
+                                <div class="table-container">
+                                    <table class="custom-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Job ID</th>
+                                                <th>Status</th>
+                                                <th>Candidate Source</th>
+                                                <th>Template</th>
+                                                <th>Output</th>
+                                                <th>Updated</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="admin-resume-jobs-body">
+                                            <tr><td colspan="7" class="text-center">Loading formatted resume jobs...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -285,7 +365,7 @@
             </section>
 
         </main>
-        
+
         <!-- Premium Footer -->
         <footer class="app-footer">
             <p>&copy; 2026 Hays Agentic Document Platform. Created with premium dynamic UX.</p>
@@ -307,7 +387,7 @@
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-            
+
             <div class="modal-body">
                 <div class="manifest-stats">
                     <div class="stat-pill">
@@ -324,14 +404,35 @@
                     </div>
                 </div>
 
+                <div class="template-detail-grid">
+                    <div class="detail-pill">
+                        <span class="detail-label">Object Key</span>
+                        <code id="modal-template-object-key">-</code>
+                    </div>
+                    <div class="detail-pill">
+                        <span class="detail-label">Manifest ID</span>
+                        <code id="modal-manifest-id">-</code>
+                    </div>
+                    <div class="detail-pill">
+                        <span class="detail-label">Created</span>
+                        <span id="modal-manifest-created">-</span>
+                    </div>
+                </div>
+
                 <div class="fields-list-wrapper">
-                    <h4>Fields Schema Dictionary</h4>
+                    <div class="manifest-section-header">
+                        <h4>Fields Schema Dictionary</h4>
+                        <button class="btn btn-outline btn-small" onclick="toggleRawManifest()">
+                            <i class="fa-solid fa-code"></i> Toggle Raw Manifest
+                        </button>
+                    </div>
                     <div class="table-container">
                         <table class="custom-table compact">
                             <thead>
                                 <tr>
                                     <th>Field Variable Name</th>
                                     <th>Type</th>
+                                    <th>Required</th>
                                     <th>XML Token Match</th>
                                     <th>Source Context Hint</th>
                                 </tr>
@@ -341,6 +442,7 @@
                             </tbody>
                         </table>
                     </div>
+                    <pre class="raw-manifest hidden" id="modal-raw-manifest"></pre>
                 </div>
             </div>
         </div>
