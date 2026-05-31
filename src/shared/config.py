@@ -44,9 +44,9 @@ class Settings(BaseSettings):
     bedrock_fallback_model_id: str = "meta.llama3-70b-instruct-v1:0"
     bedrock_max_output_tokens_template_analysis: int = 32768
     bedrock_temperature_template_analysis: float = 0.0
-    bedrock_max_output_tokens_data_mapping: int = 8192
+    bedrock_max_output_tokens_data_mapping: int = 16384
     bedrock_temperature_data_mapping: float = 0.0
-    bedrock_max_output_tokens_default: int = 8192
+    bedrock_max_output_tokens_default: int = 16384
     bedrock_temperature_default: float = 0.1
 
     template_analysis_model_profile: str = "balanced"

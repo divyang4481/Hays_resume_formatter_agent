@@ -25,7 +25,12 @@ class LLMClient:
 
     def extract_structured_fields(self, prompt: str, use_strong_model: bool = False) -> dict:
         model = self.strong_model if use_strong_model else self.fast_model
-        text = self._call_bedrock(system_prompt="", user_prompt=prompt, model=model, max_tokens=1200)
+        text = self._call_bedrock(
+            system_prompt="",
+            user_prompt=prompt,
+            model=model,
+            max_tokens=settings.bedrock_max_output_tokens_default,
+        )
         return {
             "model": model,
             "provider": self.provider,
