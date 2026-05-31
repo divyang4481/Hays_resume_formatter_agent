@@ -8,9 +8,10 @@ services:
     depends_on:
       - api
     environment:
-      - API_URL=http://api:8000
+      - API_BASE_URL=http://localhost:8000
+      - PORTAL_BASE_PATH=/portal
     volumes:
-      - ./src/frontend:/usr/share/nginx/html
+      - ./src/frontend:/usr/share/nginx/html/portal
 
   api:
     build:
@@ -46,6 +47,7 @@ services:
       - BEDROCK_AGENT_ID=${BEDROCK_AGENT_ID}
       - BEDROCK_AGENT_ALIAS_ID=${BEDROCK_AGENT_ALIAS_ID}
       - BEDROCK_KB_ID=${BEDROCK_KB_ID}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
     volumes:
       - .:/app
       - ~/.aws:/root/.aws:ro

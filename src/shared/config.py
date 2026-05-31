@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     bedrock_kb_id: str = ""
 
     enable_auth: bool = False
+    cors_allow_origins: str = "http://localhost:8080,http://127.0.0.1:8080"
 
     # Bedrock Fallback & Tokens configuration
     bedrock_fallback_model_id: str = "meta.llama3-70b-instruct-v1:0"

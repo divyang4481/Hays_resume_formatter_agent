@@ -1,10 +1,11 @@
 # Hays Resume Formatter Agent
 
-MVP starter implementation for AWS-oriented resume formatting pipeline using API + worker architecture and LangGraph flows.
+MVP implementation for AWS-oriented resume formatting using three deployable containers: a React frontend portal, a FastAPI backend API, and a background worker running LangGraph flows.
 
 ## What is implemented now
 
-- FastAPI service for template upload and formatting job submission.
+- React frontend portal served by its own container at `/portal` with separate `/portal/app` and `/portal/admin` SPA routes.
+- FastAPI service for API-only template upload, formatting job submission, polling, and DOCX download.
 - Switchable adapters for local or AWS-backed runtime:
   - S3 object storage adapter
   - SQS queue adapter
@@ -20,14 +21,37 @@ MVP starter implementation for AWS-oriented resume formatting pipeline using API
 
 ## Project layout
 
-- `src/api` - HTTP API
+- `src/frontend` - React SPA assets for the dedicated frontend container
+- `src/api` - HTTP API-only backend; it does not serve frontend assets
 - `src/worker` - background worker and graph logic
 - `src/shared` - config, schemas, storage, queue, repository
 - `docs/contracts` - API/queue/manifest contracts
 - `docs/architecture` - architecture notes
 - `infra/cloudformation` - AWS stack templates and sample params
-- `docker` - Docker image build files
+- `docker` - Docker image build files, including the nginx frontend image
 - `scripts` - deploy, env bootstrap, and extraction demo scripts
+
+## Runtime topology
+
+This project is intended to run as three different containers:
+
+1. `frontend` - nginx container that serves only the React portal under `/portal`.
+2. `api` - FastAPI container that exposes only backend API endpoints and file downloads.
+3. `worker` - background processing container for template analysis and resume rendering.
+
+Local development uses different ports:
+
+- Frontend portal: `http://localhost:8080/portal`
+- Normal user SPA route: `http://localhost:8080/portal/app`
+- Admin SPA route: `http://localhost:8080/portal/admin`
+- Backend API: `http://localhost:8000`
+
+In ECS/ALB deployments, route traffic by path:
+
+- `https://<base-url>/portal/*` -> frontend service
+- `https://<base-url>/api/*` -> API service
+
+The API service remains backend-only. It supports `/api/*` path-prefix forwarding for ALB configurations that do not strip the prefix, while local development can keep using unprefixed API routes like `http://localhost:8000/format`. Configure the frontend container with `API_BASE_URL=/api` in ECS and `API_BASE_URL=http://localhost:8000` locally.
 
 ## Create AWS infrastructure
 
@@ -102,8 +126,8 @@ docker compose -f docker-compose.local.yml logs worker --tail=100
 Verify that the logs contain:
 `[TemplateAnalysis] pipeline_version=layout_v2_agentic_qc_2026_05_28`
 
-This runs API and worker locally while using AWS S3, SQS, RDS, and Bedrock per `.env`.
-The local directory is mounted as a volume so that host code changes are instantly reflected without requiring image rebuilds.
+This runs frontend, API, and worker locally while using AWS S3, SQS, RDS, and Bedrock per `.env`.
+The local directory is mounted as a volume so that host code changes are instantly reflected without requiring image rebuilds. Open the portal at `http://localhost:8080/portal`; the frontend calls the API on `http://localhost:8000`.
 
 ## Quick start without containers (optional)
 
@@ -145,7 +169,9 @@ What this demo shows:
 
 ## Basic API flow test
 
-1. Upload a DOCX template to `POST /admin/templates`.
+The frontend is not served by the API container. Call the API directly on local port `8000`, or through `/api` in ECS.
+
+1. Upload a DOCX template to `POST /admin/templates` or `POST /api/admin/templates`.
 2. Poll `GET /jobs/{analysis_job_id}` until `completed`.
-3. Submit `POST /format` with `template_id` and `resume_text`.
+3. Submit `POST /format` or `POST /api/format` with `template_id` and `resume_text`.
 4. Poll `GET /jobs/{job_id}` and read output key from response.

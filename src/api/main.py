@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import io
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Form
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.shared.models import (
@@ -15,22 +15,115 @@ from src.shared.models import (
     JobListResponse,
     JobType,
     ResumeFormatMessage,
-    ResumeFormatRequest,
     ResumeFormatResponse,
     TemplateAnalysisMessage,
     TemplateCreateResponse,
     TemplateListResponse,
     TemplateDetailResponse,
 )
+from src.shared.config import settings
 from src.shared.queue import queue_bus
 from src.shared.repository import repo
 from src.shared.storage import object_store
 
 app = FastAPI(title="Hays Resume Formatter API", version="0.1.0")
 
+allowed_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
+if allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+@app.middleware("http")
+async def support_api_path_prefix(request: Request, call_next):
+    """Allow ECS/ALB deployments to expose this service below /api.
+
+    The API container remains API-only. This middleware only normalizes the
+    incoming path when an external router forwards /api/* without stripping the
+    prefix, so both local `/health` and ECS `/api/health` work.
+    """
+
+    path = request.scope.get("path", "")
+    if path == "/api":
+        request.scope["path"] = "/health"
+    elif path.startswith("/api/"):
+        request.scope["path"] = path[4:]
+    return await call_next(request)
+
 
 class SelectTemplateRequest(BaseModel):
     template_id: str
+
+
+FORMAT_REQUEST_BODY_OPENAPI = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "template_id": {
+                        "type": "string",
+                        "description": "Optional template ID. If omitted, the job may pause for template selection.",
+                    },
+                    "resume_text": {
+                        "type": "string",
+                        "description": "Raw candidate resume text.",
+                    },
+                    "resume_object_key": {
+                        "type": "string",
+                        "description": "Existing object-store key for an already-uploaded resume.",
+                    },
+                },
+            },
+            "examples": {
+                "resumeText": {
+                    "summary": "Submit plain resume text",
+                    "value": {
+                        "template_id": "template-uuid",
+                        "resume_text": "John Doe\njohn@example.com\n...",
+                    },
+                },
+                "existingObject": {
+                    "summary": "Submit existing object key",
+                    "value": {
+                        "template_id": "template-uuid",
+                        "resume_object_key": "resumes/candidate.pdf",
+                    },
+                },
+            },
+        },
+        "multipart/form-data": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "template_id": {
+                        "type": "string",
+                        "description": "Optional template ID. If omitted, the job may pause for template selection.",
+                    },
+                    "resume_text": {
+                        "type": "string",
+                        "description": "Optional pasted resume text to submit with or instead of a file.",
+                    },
+                    "resume_object_key": {
+                        "type": "string",
+                        "description": "Optional existing object-store key. Usually omitted when uploading a file.",
+                    },
+                    "file": {
+                        "type": "string",
+                        "format": "binary",
+                        "description": "Candidate resume file. Supports PDF, DOCX, or TXT.",
+                    },
+                },
+            },
+        },
+    },
+}
 
 
 @app.get("/health")
@@ -38,8 +131,14 @@ def health() -> dict[str, str]:
     return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
 
 
-@app.post("/admin/templates", response_model=TemplateCreateResponse)
-async def upload_template(file: UploadFile = File(...)) -> TemplateCreateResponse:
+@app.post(
+    "/admin/templates",
+    response_model=TemplateCreateResponse,
+    summary="Upload a DOCX template for analysis",
+)
+async def upload_template(
+    file: UploadFile = File(..., description="DOCX template file to analyze and register")
+) -> TemplateCreateResponse:
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only DOCX templates are supported in MVP")
 
@@ -68,47 +167,22 @@ async def upload_template(file: UploadFile = File(...)) -> TemplateCreateRespons
     )
 
 
-@app.post("/format", response_model=ResumeFormatResponse)
-async def submit_format_job(request: Request) -> ResumeFormatResponse:
-    content_type = request.headers.get("content-type", "")
-    template_id = None
-    resume_text = None
-    resume_object_key = None
-
-    if "application/json" in content_type:
-        body = await request.json()
-        template_id = body.get("template_id")
-        resume_text = body.get("resume_text")
-        resume_object_key = body.get("resume_object_key")
-    elif "multipart/form-data" in content_type:
-        form = await request.form()
-        print(f"[API Debug] form keys: {list(form.keys())}")
-        template_id = form.get("template_id")
-        resume_text = form.get("resume_text")
-        resume_object_key = form.get("resume_object_key")
-        
-        file = form.get("file")
-        print(f"[API Debug] file: {file}, type: {type(file)}")
-        if file and hasattr(file, "filename") and file.filename:
-            print(f"[API Debug] file filename: {file.filename}")
-            # Direct file upload! Save the uploaded resume to the S3 bucket / storage layer
-            file_content = await file.read()
-            resume_name = Path(file.filename).name
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            resume_object_key = f"resumes/{timestamp}_{resume_name}"
-            
-            # Save the file cleanly into our object store
-            object_store.put_bytes(resume_object_key, file_content)
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported Content-Type. Please use application/json or multipart/form-data."
-        )
-
+def create_resume_format_job(
+    *,
+    template_id: str | None,
+    resume_text: str | None,
+    resume_object_key: str | None,
+) -> ResumeFormatResponse:
     if template_id:
         template = repo.get_template(template_id)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
+
+    if not resume_text and not resume_object_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide resume_text, resume_object_key, or upload a resume file.",
+        )
 
     job = repo.create_job(
         JobType.RESUME_FORMAT,
@@ -125,6 +199,57 @@ async def submit_format_job(request: Request) -> ResumeFormatResponse:
     queue_bus.push_resume_format(message.model_dump())
 
     return ResumeFormatResponse(job_id=job.job_id, status=JobStatus.QUEUED)
+
+
+def build_resume_object_key(file: UploadFile) -> str:
+    resume_name = Path(file.filename or "resume").name
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    resume_object_key = f"resumes/{timestamp}_{resume_name}"
+    return resume_object_key
+
+
+@app.post(
+    "/format",
+    response_model=ResumeFormatResponse,
+    summary="Submit a resume formatting job",
+    description=(
+        "Supports both existing JSON clients and Swagger/browser multipart uploads. "
+        "Use JSON with resume_text or resume_object_key, or multipart/form-data with a resume file."
+    ),
+    openapi_extra={"requestBody": FORMAT_REQUEST_BODY_OPENAPI},
+)
+async def submit_format_job(request: Request) -> ResumeFormatResponse:
+    content_type = request.headers.get("content-type", "")
+    template_id = None
+    resume_text = None
+    resume_object_key = None
+
+    if "application/json" in content_type:
+        body = await request.json()
+        template_id = body.get("template_id")
+        resume_text = body.get("resume_text")
+        resume_object_key = body.get("resume_object_key")
+    elif "multipart/form-data" in content_type:
+        form = await request.form()
+        template_id = form.get("template_id")
+        resume_text = form.get("resume_text")
+        resume_object_key = form.get("resume_object_key")
+
+        file = form.get("file")
+        if file and hasattr(file, "filename") and file.filename:
+            resume_object_key = build_resume_object_key(file)
+            object_store.put_bytes(resume_object_key, await file.read())
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported Content-Type. Please use application/json or multipart/form-data."
+        )
+
+    return create_resume_format_job(
+        template_id=template_id,
+        resume_text=resume_text,
+        resume_object_key=resume_object_key,
+    )
 
 
 @app.post("/jobs/{job_id}/select-template", response_model=ResumeFormatResponse)
@@ -231,7 +356,4 @@ def get_template_details(template_id: str) -> TemplateDetailResponse:
         version=template["version"],
         manifest=manifest,
     )
-
-
-app.mount("/", StaticFiles(directory="src/frontend", html=True), name="frontend")
 

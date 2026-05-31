@@ -1,0 +1,4 @@
+window.__HAYS_CONFIG__ = {
+    API_BASE_URL: '${API_BASE_URL}',
+    PORTAL_BASE_PATH: '${PORTAL_BASE_PATH}'
+};
