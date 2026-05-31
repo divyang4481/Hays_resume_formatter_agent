@@ -151,6 +151,24 @@
                             <span class="status-dot pulsing" id="status-dot"></span>
                             <span class="status-msg" id="status-message">Agent is reading resume and matching variables...</span>
                         </div>
+
+                        <!-- Interactive Template Selection (When job is waiting for selection) -->
+                        <div class="selection-box hidden" id="selection-box">
+                            <div class="selection-header">
+                                <h4><i class="fa-solid fa-wand-magic-sparkles"></i> Select Template to Continue</h4>
+                                <p>Please choose a corporate template to apply to the candidate's CV.</p>
+                            </div>
+                            <div class="selection-body">
+                                <div class="selection-control">
+                                    <select id="pipeline-template-select" class="custom-select">
+                                        <option value="" disabled selected>-- Select a Template --</option>
+                                    </select>
+                                    <button id="btn-confirm-selection" class="btn btn-primary" onclick="confirmTemplateSelection()">
+                                        <i class="fa-solid fa-circle-check"></i> Confirm & Process
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                         
                         <!-- Extracted Manifest Values & Download Box -->
                         <div class="result-box hidden" id="result-box">

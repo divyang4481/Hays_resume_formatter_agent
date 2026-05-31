@@ -10,21 +10,5 @@ Map resume data to the manifest fields below.
 {{ resume_text }}
 ```
 
-Return ONLY JSON with this shape:
-```json
-{
-  "field_mappings": {
-    "field_name": {
-      "value": null,
-      "confidence": 0.0,
-      "status": "mapped|missing|needs_input",
-      "source": {
-        "section": null,
-        "evidence_text": null,
-        "page": null
-      }
-    }
-  },
-  "missing_fields_requiring_recruiter_or_ats_input": []
-}
-```
+Return ONLY strict minified JSON under key "extracted" without any indentation or pretty-printing spaces:
+{"extracted":{"field_name":"value or structure"}}

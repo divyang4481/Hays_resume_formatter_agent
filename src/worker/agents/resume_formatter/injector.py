@@ -82,7 +82,7 @@ def _inject_mergefields_in_element(para_elem: Any, field_map: dict[str, str]) ->
             text = (instr_text.text or "").strip()
             m = re.search(r"MERGEFIELD\s+(\S+)", text, re.IGNORECASE)
             if m:
-                current_field = m.group(1)
+                current_field = m.group(1).strip().strip('"\'')
 
         elif state == "in_display":
             t = run.find(qn("w:t"))
@@ -95,7 +95,7 @@ def _inject_mergefields_in_element(para_elem: Any, field_map: dict[str, str]) ->
         instr = fld.get(qn("w:instr")) or ""
         m = re.search(r"MERGEFIELD\s+(\S+)", instr, re.IGNORECASE)
         if m:
-            mf_name = m.group(1).strip()
+            mf_name = m.group(1).strip().strip('"\'')
             if mf_name in field_map:
                 value = field_map[mf_name]
                 texts = fld.findall(".//" + qn("w:t"))
@@ -123,55 +123,51 @@ def _row_contains_tablestart(tr_elem: Any, table_name: str) -> bool:
 
 
 def _inject_table_merge_rows(doc: Document, table_data_map: dict[str, list[dict[str, str]]]) -> None:
-    """Scan all tables in the document and expand rows matching TableStart:<table_name> / TableEnd:<table_name> markers."""
+    """Scan all tables in the document (including nested ones) and expand rows matching TableStart:<table_name> markers."""
     if not table_data_map:
         return
 
-    for table in doc.tables:
-        i = 0
-        while i < len(table.rows):
-            row = table.rows[i]
-            tr_elem = row._tr
+    # Find all w:tr elements anywhere in the document XML (handles nested tables perfectly!)
+    tr_elements = doc._element.findall(".//" + qn("w:tr"))
+    for tr_elem in tr_elements:
+        if tr_elem.getparent() is None:
+            continue
             
-            matched_table_name = None
-            for tname in table_data_map.keys():
-                if _row_contains_tablestart(tr_elem, tname):
-                    matched_table_name = tname
-                    break
+        matched_table_name = None
+        for tname in table_data_map.keys():
+            if _row_contains_tablestart(tr_elem, tname):
+                matched_table_name = tname
+                break
+        
+        if matched_table_name:
+            items = table_data_map[matched_table_name]
+            tr_parent = tr_elem.getparent()
+            tr_index = tr_parent.index(tr_elem)
             
-            if matched_table_name:
-                items = table_data_map[matched_table_name]
-                tr_parent = tr_elem.getparent()
-                tr_index = tr_parent.index(tr_elem)
+            # Clone and inject for each item in the list
+            for item in items:
+                cloned_tr = copy.deepcopy(tr_elem)
                 
-                # Clone and inject for each item in the list
-                for item in items:
-                    cloned_tr = copy.deepcopy(tr_elem)
-                    
-                    local_field_map = {
-                        f"TableStart:{matched_table_name}": "",
-                        f"TableEnd:{matched_table_name}": "",
-                        **item
-                    }
-                    
-                    # Also map lowercase/stripped keys for reliability
-                    for k, v in list(local_field_map.items()):
-                        local_field_map[k.lower()] = v
-                        local_field_map[k.strip()] = v
-                    
-                    for para_p in cloned_tr.findall(".//" + qn("w:p")):
-                        _inject_mergefields_in_element(para_p, local_field_map)
-                    
-                    # Insert the cloned row
-                    tr_parent.insert(tr_index, cloned_tr)
-                    tr_index += 1
+                local_field_map = {
+                    f"TableStart:{matched_table_name}": "",
+                    f"TableEnd:{matched_table_name}": "",
+                    **item
+                }
                 
-                # Remove the original template row
-                tr_parent.remove(tr_elem)
-                # Adjust loop index over the newly inserted rows
-                i += len(items)
-            else:
-                i += 1
+                # Also map lowercase/stripped keys for reliability
+                for k, v in list(local_field_map.items()):
+                    local_field_map[k.lower()] = v
+                    local_field_map[k.strip()] = v
+                
+                for para_p in cloned_tr.findall(".//" + qn("w:p")):
+                    _inject_mergefields_in_element(para_p, local_field_map)
+                
+                # Insert the cloned row
+                tr_parent.insert(tr_index, cloned_tr)
+                tr_index += 1
+            
+            # Remove the original template row
+            tr_parent.remove(tr_elem)
 
 
 def _inject_mergefields(doc: Document, field_map: dict[str, str]) -> None:
@@ -179,21 +175,18 @@ def _inject_mergefields(doc: Document, field_map: dict[str, str]) -> None:
     if not field_map:
         return
 
-    def _process_container(container: Any) -> None:
-        for para in container.paragraphs:
-            _inject_mergefields_in_element(para._element, field_map)
-        for table in container.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        _inject_mergefields_in_element(para._element, field_map)
+    # Process all w:p elements anywhere in the document XML (handles nested tables, content controls, and text boxes!)
+    for para_el in doc._element.findall(".//" + qn("w:p")):
+        _inject_mergefields_in_element(para_el, field_map)
 
-    _process_container(doc)
+    # Process all headers and footers XML
     for section in doc.sections:
         if section.header:
-            _process_container(section.header)
+            for para_el in section.header._element.findall(".//" + qn("w:p")):
+                _inject_mergefields_in_element(para_el, field_map)
         if section.footer:
-            _process_container(section.footer)
+            for para_el in section.footer._element.findall(".//" + qn("w:p")):
+                _inject_mergefields_in_element(para_el, field_map)
 
     print(f"[MergeField] Applied XML-level replacement for {len(field_map)} fields: {list(field_map.keys())}")
 
@@ -266,25 +259,24 @@ def _inject_text_placeholders(doc: Document, text_map: dict[str, str]) -> None:
     if not text_map:
         return
 
-    def process_paragraph(para: Any) -> None:
+    # Process all w:p elements anywhere in the document XML (handles nested tables, content controls, and text boxes!)
+    for para_el in doc._element.findall(".//" + qn("w:p")):
+        para_obj = Paragraph(para_el, doc)
         for token, val in text_map.items():
-            _replace_token_in_paragraph(para, token, val)
+            _replace_token_in_paragraph(para_obj, token, val)
 
-    def process_container(container: Any) -> None:
-        for para in container.paragraphs:
-            process_paragraph(para)
-        for table in container.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        process_paragraph(para)
-
-    process_container(doc)
+    # Process all headers and footers XML
     for section in doc.sections:
         if section.header:
-            process_container(section.header)
+            for para_el in section.header._element.findall(".//" + qn("w:p")):
+                para_obj = Paragraph(para_el, section.header)
+                for token, val in text_map.items():
+                    _replace_token_in_paragraph(para_obj, token, val)
         if section.footer:
-            process_container(section.footer)
+            for para_el in section.footer._element.findall(".//" + qn("w:p")):
+                para_obj = Paragraph(para_el, section.footer)
+                for token, val in text_map.items():
+                    _replace_token_in_paragraph(para_obj, token, val)
 
     print(f"[TextReplace] Applied text placeholder replacement for {len(text_map)} tokens")
 
@@ -373,71 +365,170 @@ def _inject_array_paragraphs(
 
     expanded_fields: set[str] = set()
 
-    def process_container(container: Any) -> None:
-        current_section = ""
-        i = 0
-        while i < len(container.paragraphs):
-            para = container.paragraphs[i]
-            
-            if _is_heading(para):
-                current_section = para.text.strip()
-                
-            matched_field = None
-            matched_token = None
-            best_score = -1.0
-            
-            for af in array_fields:
-                token = af["token"]
-                tokens_to_check = [token, f"{{{{{af['name']}}}}}", f"{{{{ {af['name']} }}}}"]
-                
-                found_token = None
-                for t in tokens_to_check:
-                    if t and _paragraph_contains_token(para, t):
-                        found_token = t
-                        break
-                        
-                if found_token:
-                    score = _match_section(current_section, af["section"], af["name"])
-                    if score > best_score:
-                        best_score = score
-                        matched_field = af
-                        matched_token = found_token
+    # Collect all w:p elements from body, header, footer in document order
+    paras_to_process: list[tuple[Any, Any]] = []
+    for p_el in doc._element.findall(".//" + qn("w:p")):
+        paras_to_process.append((p_el, doc))
+    for section in doc.sections:
+        if section.header:
+            for p_el in section.header._element.findall(".//" + qn("w:p")):
+                paras_to_process.append((p_el, section.header))
+        if section.footer:
+            for p_el in section.footer._element.findall(".//" + qn("w:p")):
+                paras_to_process.append((p_el, section.footer))
 
-            if matched_field and matched_token:
-                fname = matched_field["name"]
-                items = matched_field["items"]
-                p_elem = para._element
-                p_parent = p_elem.getparent()
-                p_index = p_parent.index(p_elem)
-                
-                if fname not in expanded_fields:
-                    expanded_fields.add(fname)
-                    for item in items:
-                        cloned_p = copy.deepcopy(p_elem)
-                        cloned_para_obj = Paragraph(cloned_p, para._parent)
-                        _replace_token_in_paragraph(cloned_para_obj, matched_token, item)
-                        p_parent.insert(p_index, cloned_p)
-                        p_index += 1
+    current_section = ""
+    i = 0
+    while i < len(paras_to_process):
+        para_el, parent_obj = paras_to_process[i]
+        if para_el.getparent() is None:
+            i += 1
+            continue
+            
+        para = Paragraph(para_el, parent_obj)
+        if _is_heading(para):
+            current_section = para.text.strip()
+            
+        matched_field = None
+        matched_token = None
+        best_score = -1.0
+        
+        for af in array_fields:
+            token = af["token"]
+            tokens_to_check = [token, f"{{{{{af['name']}}}}}", f"{{{{ {af['name']} }}}}"]
+            
+            found_token = None
+            for t in tokens_to_check:
+                if t and _paragraph_contains_token(para, t):
+                    found_token = t
+                    break
                     
-                    p_parent.remove(p_elem)
-                    i += len(items)
-                else:
-                    p_parent.remove(p_elem)
+            if found_token:
+                score = _match_section(current_section, af["section"], af["name"])
+                if score > best_score:
+                    best_score = score
+                    matched_field = af
+                    matched_token = found_token
+
+        if matched_field and matched_token:
+            fname = matched_field["name"]
+            items = matched_field["items"]
+            p_elem = para._element
+            p_parent = p_elem.getparent()
+            p_index = p_parent.index(p_elem)
+            
+            if fname not in expanded_fields:
+                expanded_fields.add(fname)
+                for item in items:
+                    cloned_p = copy.deepcopy(p_elem)
+                    cloned_para_obj = Paragraph(cloned_p, para._parent)
+                    _replace_token_in_paragraph(cloned_para_obj, matched_token, item)
+                    p_parent.insert(p_index, cloned_p)
+                    p_index += 1
+                
+                p_parent.remove(p_elem)
             else:
-                i += 1
-
-        for table in container.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    process_container(cell)
-
-    process_container(doc)
+                p_parent.remove(p_elem)
+        i += 1
 
 
 # ---------------------------------------------------------------------------
 # Main injection dispatcher — uses injection_details from manifest
 # ---------------------------------------------------------------------------
 
+def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, field: dict) -> bool:
+    """Inject value selectively only in the paragraphs or table cells matching source_block_ids."""
+    source_block_ids = field.get("source_block_ids") or []
+    if not source_block_ids:
+        return False
+        
+    render_strategy = field.get("render_contract", {}).get("render_strategy", "")
+    is_instruction = field.get("template_evidence", {}).get("is_instruction_only", False) or \
+                     "instruction" in str(field.get("template_evidence", {}).get("region_type", "")).lower() or \
+                     render_strategy == "remove_instruction_text"
+
+    replaced = False
+
+    if is_instruction:
+        # Instruction/CV page block replacement: first block gets the entire value, other blocks are cleared
+        first_p_replaced = False
+        for block_id in source_block_ids:
+            if block_id.startswith("b_"):
+                parts = block_id.split("_")
+                if len(parts) == 2:
+                    try:
+                        p_idx = int(parts[1])
+                        non_empty_idx = 0
+                        for para in doc.paragraphs:
+                            if para.text.strip() or len(para.runs) > 0 or para._element.findall(".//" + qn("w:fldSimple")) or para._element.findall(".//" + qn("w:instrText")):
+                                if non_empty_idx == p_idx:
+                                    # Clear all existing runs/text in this block
+                                    for r in para._element.findall(".//" + qn("w:r")):
+                                        r.getparent().remove(r)
+                                    
+                                    if not first_p_replaced:
+                                        para.add_run(value)
+                                        first_p_replaced = True
+                                        print(f"  [Targeted Instruction] Injected value into paragraph block {block_id}")
+                                    else:
+                                        para.text = ""
+                                        print(f"  [Targeted Instruction] Cleared paragraph block {block_id}")
+                                    replaced = True
+                                    break
+                                non_empty_idx += 1
+                    except Exception as e:
+                        print(f"Error replacing instruction block {block_id}: {e}")
+        return replaced
+
+    for block_id in source_block_ids:
+        if block_id.startswith("tbl_"):
+            # Table cell format: tbl_XXX_r_YYY_c_ZZZ
+            parts = block_id.split("_")
+            if len(parts) >= 6:
+                try:
+                    t_idx = int(parts[1])
+                    r_idx = int(parts[3])
+                    c_idx = int(parts[5])
+                    
+                    # Robust XML-based visual table cell locator (handles nested tables perfectly!)
+                    body_el = doc._element.find(".//" + qn("w:body"))
+                    if body_el is not None:
+                        top_level_tables = [child for child in body_el if child.tag == qn("w:tbl")]
+                        if t_idx < len(top_level_tables):
+                            table_elem = top_level_tables[t_idx]
+                            row_elements = table_elem.findall(".//" + qn("w:tr"))
+                            if r_idx < len(row_elements):
+                                row_elem = row_elements[r_idx]
+                                cell_elements = row_elem.findall(".//" + qn("w:tc"))
+                                if c_idx < len(cell_elements):
+                                    cell_elem = cell_elements[c_idx]
+                                    para_elements = cell_elem.findall(".//" + qn("w:p"))
+                                    for para_el in para_elements:
+                                        para_obj = Paragraph(para_el, doc)
+                                        if _replace_token_in_paragraph(para_obj, token, value):
+                                            replaced = True
+                except Exception as e:
+                    print(f"Error doing targeted table cell injection for {block_id}: {e}")
+        elif block_id.startswith("pd_tbl_"):
+            # pd_tbl format: pd_tbl_XXX
+            pass
+        elif block_id.startswith("b_"):
+            # Paragraph format: b_XXX
+            parts = block_id.split("_")
+            if len(parts) == 2:
+                try:
+                    p_idx = int(parts[1])
+                    non_empty_idx = 0
+                    for para in doc.paragraphs:
+                        if para.text.strip() or len(para.runs) > 0 or para._element.findall(".//" + qn("w:fldSimple")) or para._element.findall(".//" + qn("w:instrText")):
+                            if non_empty_idx == p_idx:
+                                if _replace_token_in_paragraph(para, token, value):
+                                    replaced = True
+                                break
+                            non_empty_idx += 1
+                except Exception as e:
+                    print(f"Error doing targeted paragraph injection for {block_id}: {e}")
+    return replaced
 def inject_data_into_docx(
     docx_bytes: bytes,
     extracted: dict[str, Any],
@@ -450,22 +541,83 @@ def inject_data_into_docx(
     text_placeholder_map: dict[str, str] = {}  # placeholder_text → value
     table_data_map: dict[str, list[dict[str, str]]] = {} # table_name -> list of dict values mapped by xml sub-field
 
+    # 1. Targeted injection pass first to handle visual block mappings (like multi-use [Type text])
+    targeted_injected_fields = set()
     for field in manifest_fields:
         fname = field.get("name", "")
         ftype = field.get("field_type", "scalar")
+        value = extracted.get(fname)
+        
+        # User constraint: if value is empty or not available, do not inject/replace!
+        if value is None or value == "" or value == [] or (isinstance(value, str) and not value.strip()):
+            print(f"  [Skip Injection] field '{fname}' is empty or not available, skipping targeted replacement.")
+            continue
+            
+        serialized = _serialize_value(value, ftype)
+        token = field.get("template_token") or field.get("token") or f"{{{{{fname}}}}}"
+        clean_token = token
+        if token.upper().startswith("MERGEFIELD "):
+            clean_token = token[len("MERGEFIELD "):].strip()
+
+        # Handle table merge rows separately
         inj = field.get("injection_details") or {}
         injection_type = inj.get("injection_type", "text_placeholder")
+        render_contract = field.get("render_contract") or {}
+        render_strategy = render_contract.get("render_strategy", "")
+        if injection_type == "text_placeholder" or not injection_type:
+            if render_strategy in ("mailmerge_table_region", "repeat_block"):
+                injection_type = "table_merge_row"
+
+        if injection_type == "table_merge_row":
+            continue
+
+        if ftype not in ("array", "array_object") and serialized:
+            # Try original token, clean token, and stripped bracket token
+            tokens_to_try = [clean_token, token]
+            if clean_token.startswith("[") and clean_token.endswith("]"):
+                tokens_to_try.append(clean_token[1:-1].strip())
+            if token.startswith("[") and token.endswith("]"):
+                tokens_to_try.append(token[1:-1].strip())
+
+            for tok_variant in tokens_to_try:
+                if _inject_targeted_value(doc, fname, tok_variant, serialized, field):
+                    targeted_injected_fields.add(fname)
+                    print(f"  [Targeted Injection] successfully replaced {fname} in specified blocks using '{tok_variant}'")
+                    break
+
+    # 2. Build mapping tables for global fallback pass
+    for field in manifest_fields:
+        fname = field.get("name", "")
+        
+        # Skip global fallback if this field is targeted to specific block IDs to prevent collision
+        if field.get("source_block_ids"):
+            print(f"  [Skip Global Fallback] field '{fname}' has source_block_ids, skipping global fallback to prevent collision.")
+            continue
+            
+        ftype = field.get("field_type", "scalar")
+        inj = field.get("injection_details") or {}
+        injection_type = inj.get("injection_type", "text_placeholder")
+        render_contract = field.get("render_contract") or {}
+        render_strategy = render_contract.get("render_strategy", "")
+        if injection_type == "text_placeholder" or not injection_type:
+            if render_strategy in ("mailmerge_table_region", "repeat_block"):
+                injection_type = "table_merge_row"
         value = extracted.get(fname)
+        
+        # User constraint: if value is empty or not available, do not inject/replace!
+        if value is None or value == "" or value == [] or (isinstance(value, str) and not value.strip()):
+            print(f"  [Skip Injection] field '{fname}' is empty or not available, skipping global fallback.")
+            continue
+            
         serialized = _serialize_value(value, ftype)
 
-        if injection_type == "mergefield":
-            mf_name = inj.get("mergefield_name", "")
-            if mf_name:
-                mergefield_map[mf_name] = serialized
-                print(f"  [Dispatch] {fname} → mergefield '{mf_name}' = {repr(serialized[:60])}")
+        token = field.get("template_token") or field.get("token") or f"{{{{{fname}}}}}"
+        clean_token = token
+        if token.upper().startswith("MERGEFIELD "):
+            clean_token = token[len("MERGEFIELD "):].strip()
 
-        elif injection_type == "table_merge_row":
-            table_name = inj.get("table_name", "")
+        if injection_type == "table_merge_row":
+            table_name = inj.get("table_name", "") or render_contract.get("region_name") or fname
             if table_name:
                 raw_array = value or []
                 if isinstance(raw_array, list):
@@ -487,6 +639,8 @@ def inject_data_into_docx(
                                     sf_token = sf_match.get("template_token", "")
                                     if sf_token.upper().startswith("MERGEFIELD "):
                                         xml_sf_name = sf_token[len("MERGEFIELD "):].strip()
+                                    else:
+                                        xml_sf_name = sf_token
                                 
                                 if not xml_sf_name:
                                     xml_sf_name = skey
@@ -500,29 +654,41 @@ def inject_data_into_docx(
                                 sf_token = sub_fields[0].get("template_token", "")
                                 if sf_token.upper().startswith("MERGEFIELD "):
                                     xml_sf_name = sf_token[len("MERGEFIELD "):].strip()
+                                else:
+                                    xml_sf_name = sf_token
                             items_mapped.append({xml_sf_name: _serialize_value(item, "scalar")})
                     
                     table_data_map[table_name] = items_mapped
-                    print(f"  [Dispatch] {fname} → table_merge_row '{table_name}' ({len(items_mapped)} items) = {repr(serialized[:60])}")
-
-        elif injection_type in ("text_placeholder", "handlebars"):
-            placeholder = inj.get("placeholder_text", f"{{{{{fname}}}}}")
-            if ftype in ("array", "array_object"):
-                # Arrays/repeated bullet paragraphs are expanded by _inject_array_paragraphs directly
-                pass
-            else:
-                if placeholder:
-                    text_placeholder_map[placeholder] = serialized
-                # Also add generic {{field_name}} variants as fallback
-                text_placeholder_map[f"{{{{{fname}}}}}"] = serialized
-                text_placeholder_map[f"{{{{ {fname} }}}}"] = serialized
-                print(f"  [Dispatch] {fname} → text_placeholder '{placeholder}' = {repr(serialized[:60])}")
+                    print(f"  [Dispatch] {fname} -> table_merge_row '{table_name}' ({len(items_mapped)} items) = {repr(serialized[:60])}")
 
         else:
             if ftype not in ("array", "array_object"):
-                token = field.get("template_token", f"{{{{{fname}}}}}")
+                # Put in mergefield map (if it's not a visual bracket visual layout token)
+                if not clean_token.startswith("[") and not clean_token.startswith("{"):
+                    mergefield_map[clean_token] = serialized
+                    mergefield_map[clean_token.lower()] = serialized
+                    mergefield_map[clean_token.strip()] = serialized
+                    mergefield_map[re.sub(r"[^a-zA-Z0-9]+", "", clean_token)] = serialized
+
+                # Put in text placeholder map as fallback
                 text_placeholder_map[token] = serialized
+                text_placeholder_map[clean_token] = serialized
                 text_placeholder_map[f"{{{{{fname}}}}}"] = serialized
+                text_placeholder_map[f"{{{{ {fname} }}}}"] = serialized
+                text_placeholder_map[f"[{fname}]"] = serialized
+                text_placeholder_map[fname] = serialized
+                
+                # Unbracketed fallback for bracketed visual layout tokens
+                if clean_token.startswith("[") and clean_token.endswith("]"):
+                    unbracketed = clean_token[1:-1].strip()
+                    text_placeholder_map[unbracketed] = serialized
+                    text_placeholder_map[unbracketed.lower()] = serialized
+                if token.startswith("[") and token.endswith("]"):
+                    unbracketed = token[1:-1].strip()
+                    text_placeholder_map[unbracketed] = serialized
+                    text_placeholder_map[unbracketed.lower()] = serialized
+
+                print(f"  [Dispatch] {fname} -> mergefield/text '{clean_token}' = {repr(serialized[:60])}")
 
     # Apply strategies
     print(f"[Injector] TableMergeRows to expand: {list(table_data_map.keys())}")
@@ -544,7 +710,19 @@ def inject_render_payload_into_docx(template_bytes: bytes, payload: dict, manife
     fields = manifest.get("fields", []) if isinstance(manifest, dict) else []
     data = {}
     data.update(payload.get("render_values", {}))
-    data.update(payload.get("placeholder_values", {}))
+    
+    # Safely unpack placeholder_values list of dicts or fallback to dict
+    ph_vals = payload.get("placeholder_values", {})
+    if isinstance(ph_vals, list):
+        for item in ph_vals:
+            if isinstance(item, dict):
+                if "name" in item:
+                    data[item["name"]] = item.get("value")
+                if "token" in item:
+                    data[item["token"]] = item.get("value")
+    elif isinstance(ph_vals, dict):
+        data.update(ph_vals)
+
     for block_name, items in (payload.get("repeat_blocks", {}) or {}).items():
         data[block_name] = items
     return inject_data_into_docx(template_bytes, data, fields)

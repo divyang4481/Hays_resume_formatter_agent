@@ -25,7 +25,8 @@ class LocalObjectStore:
 class S3ObjectStore:
     def __init__(self) -> None:
         self.bucket = settings.s3_bucket
-        self.client = boto3.client("s3", region_name=settings.aws_region)
+        session = boto3.Session(profile_name=settings.aws_profile) if settings.aws_profile else boto3.Session()
+        self.client = session.client("s3", region_name=settings.aws_region)
 
     def put_bytes(self, object_key: str, content: bytes) -> str:
         self.client.put_object(Bucket=self.bucket, Key=object_key, Body=content)

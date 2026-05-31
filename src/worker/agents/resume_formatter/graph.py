@@ -111,7 +111,19 @@ def map_resume_to_manifest(state: ResumeFormatState) -> ResumeFormatState:
         }}
 
     state["mapping_result"] = extracted
-    state["extracted"] = {k: v.get("value") for k, v in extracted.get("field_mappings", {}).items()}
+    
+    # Ensure candidate_own_cv is populated with the original resume text
+    field_mappings = extracted.setdefault("field_mappings", {})
+    if "candidate_own_cv" in [f.get("name") for f in fields]:
+        if "candidate_own_cv" not in field_mappings or field_mappings["candidate_own_cv"].get("value") is None:
+            field_mappings["candidate_own_cv"] = {
+                "value": raw_text,
+                "status": "mapped",
+                "confidence": 1.0,
+                "source": {"page": 1, "section": "Original CV", "evidence_text": "Full original resume text injected."}
+            }
+
+    state["extracted"] = {k: v.get("value") for k, v in field_mappings.items()}
     return state
 
 
@@ -127,6 +139,8 @@ def build_render_payload(state: ResumeFormatState) -> ResumeFormatState:
         "template_id": state.get("template_id"),
         "filled_at": datetime.now(timezone.utc).isoformat(),
         "manifest": manifest,
+        "fields": manifest.get("fields", []),
+        "filled_values": state.get("extracted", {}),
         "mapping_result": mapping_result,
         "render_payload": payload,
     }

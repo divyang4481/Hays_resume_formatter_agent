@@ -4,9 +4,5 @@ Fields definition:
 Resume text:
 {{ resume_text }}
 
-Return strict JSON only:
-{
-  "extracted": {
-    "field_name": "value or structure"
-  }
-}
+Return highly compact minified JSON under key "extracted" without any indentation or pretty-printing spaces:
+{"extracted":{"field_name":"value or structure"}}

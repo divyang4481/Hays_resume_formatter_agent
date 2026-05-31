@@ -38,7 +38,8 @@ class SQSQueueBus:
         self.recreate_client()
 
     def recreate_client(self) -> None:
-        self.client = boto3.client("sqs", region_name=settings.aws_region)
+        session = boto3.Session(profile_name=settings.aws_profile) if settings.aws_profile else boto3.Session()
+        self.client = session.client("sqs", region_name=settings.aws_region)
         self.template_analysis_url = settings.sqs_template_analysis_queue_url
         self.resume_format_url = settings.sqs_resume_format_queue_url
 

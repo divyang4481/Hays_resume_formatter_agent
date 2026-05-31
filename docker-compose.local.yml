@@ -1,4 +1,17 @@
 services:
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000
+    volumes:
+      - ./src/frontend:/usr/share/nginx/html
+
   api:
     build:
       context: .

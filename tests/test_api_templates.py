@@ -62,3 +62,36 @@ def test_list_and_get_templates():
     # 4. Test GET /templates/non-existent-id -> 404
     err_response = client.get("/templates/non-existent-id")
     assert err_response.status_code == 404
+
+
+def test_select_template_endpoint():
+    from src.shared.models import JobStatus, JobType
+    
+    # 1. Create a dummy template in repo
+    template_id, _ = repo.create_template(
+        template_name="Test Selection Template.docx",
+        object_key="templates/Test Selection Template.docx"
+    )
+
+    # 2. Create a dummy job in the repo in WAITING_FOR_TEMPLATE_SELECTION status
+    job = repo.create_job(
+        job_type=JobType.RESUME_FORMAT,
+        template_id=None,
+        resume_text="Dummy CV text"
+    )
+    repo.update_job(job.job_id, status=JobStatus.WAITING_FOR_TEMPLATE_SELECTION)
+
+    # 3. Test POST /jobs/{job_id}/select-template
+    payload = {"template_id": template_id}
+    response = client.post(f"/jobs/{job.job_id}/select-template", json=payload)
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == job.job_id
+    assert data["status"] == "queued"
+
+    # 4. Verify job status updated in repo
+    updated_job = repo.get_job(job.job_id)
+    assert updated_job.status == JobStatus.QUEUED
+    assert updated_job.template_id == template_id
+

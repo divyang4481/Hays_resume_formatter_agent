@@ -15,8 +15,10 @@ class LLMClient:
         self.provider = "bedrock"
         self.fast_model = settings.llm_model_fast
         self.strong_model = settings.llm_model_strong
-        self._bedrock_runtime = boto3.client("bedrock-runtime", region_name=settings.aws_region)
-        self._bedrock_agent_runtime = boto3.client("bedrock-agent-runtime", region_name=settings.aws_region)
+        
+        session = boto3.Session(profile_name=settings.aws_profile) if settings.aws_profile else boto3.Session()
+        self._bedrock_runtime = session.client("bedrock-runtime", region_name=settings.aws_region)
+        self._bedrock_agent_runtime = session.client("bedrock-agent-runtime", region_name=settings.aws_region)
         self.bedrock_agent_id = settings.bedrock_agent_id
         self.bedrock_agent_alias_id = settings.bedrock_agent_alias_id
         self.prompt_manager = PromptManager()
@@ -205,7 +207,28 @@ class LLMClient:
         if markdown_match:
             cleaned_text = markdown_match.group(1).strip()
 
-        payload = json.loads(cleaned_text)
+        try:
+            # Clean common JSON syntax errors produced by LLMs
+            repaired = cleaned_text
+            # Fix trailing quotes after closing square bracket, e.g. ]" or ]"} or ]"}],"education"
+            repaired = re.sub(r'\]\s*"\s*\}', r']}', repaired)
+            repaired = re.sub(r'\]\s*"\s*\]', r']]', repaired)
+            repaired = re.sub(r'\]\s*"\s*\}\s*\]', r']}]', repaired)
+            repaired = re.sub(r'\]\s*"\s*\}\s*(,\s*")', r']}\1', repaired)
+            # Fix missing commas between objects in an array: } { -> } , {
+            repaired = re.sub(r'\}\s*\{', r'},{', repaired)
+            
+            payload = json.loads(repaired)
+        except Exception as json_err:
+            try:
+                payload = json.loads(cleaned_text)
+            except Exception:
+                print(f"Failed to parse LLM response as JSON: {json_err}")
+                print("Raw LLM response:")
+                print("=" * 80)
+                print(text)
+                print("=" * 80)
+                raise json_err
         if isinstance(payload.get("field_mappings"), dict):
             return payload
 
@@ -253,48 +276,38 @@ class LLMClient:
             except Exception as e:
                 print(f"Bedrock Agent invocation failed: {e}. Falling back to foundation model direct call...")
 
-        if model.startswith("meta.llama"):
-            prompt = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-            body = {
-                "prompt": prompt,
-                "max_gen_len": min(max_tokens, 2048),
-                "temperature": temperature,
-                "top_p": 0.9
+        messages = [
+            {
+                "role": "user",
+                "content": [{"text": user_prompt}]
             }
-            response = self._bedrock_runtime.invoke_model(
-                modelId=model,
-                body=json.dumps(body).encode("utf-8"),
-                contentType="application/json",
-                accept="application/json",
-            )
-            headers = response.get("ResponseMetadata", {}).get("HTTPHeaders", {})
-            usage["input_tokens"] = int(headers.get("x-amzn-bedrock-input-token-count", 0))
-            usage["output_tokens"] = int(headers.get("x-amzn-bedrock-output-token-count", 0))
-
-            payload = json.loads(response["body"].read().decode("utf-8"))
-            return payload.get("generation", "").strip(), usage
-
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
-            "temperature": temperature,
+        ]
+        
+        system = [{"text": system_prompt}] if system_prompt else []
+        
+        converse_params = {
+            "modelId": model,
+            "messages": messages,
+            "inferenceConfig": {
+                "temperature": temperature,
+                "maxTokens": max_tokens
+            }
         }
-        response = self._bedrock_runtime.invoke_model(
-            modelId=model,
-            body=json.dumps(body).encode("utf-8"),
-            contentType="application/json",
-            accept="application/json",
-        )
-        headers = response.get("ResponseMetadata", {}).get("HTTPHeaders", {})
-        usage["input_tokens"] = int(headers.get("x-amzn-bedrock-input-token-count", 0))
-        usage["output_tokens"] = int(headers.get("x-amzn-bedrock-output-token-count", 0))
+        if system:
+            converse_params["system"] = system
 
-        payload = json.loads(response["body"].read().decode("utf-8"))
-        content = payload.get("content", [])
-        text_parts = [item.get("text", "") for item in content if item.get("type") == "text"]
-        return "\n".join(text_parts).strip(), usage
+        try:
+            response = self._bedrock_runtime.converse(**converse_params)
+            text = response['output']['message']['content'][0]['text']
+            usage_info = response.get("usage", {})
+            usage = {
+                "input_tokens": usage_info.get("inputTokens", 0),
+                "output_tokens": usage_info.get("outputTokens", 0)
+            }
+            return text, usage
+        except Exception as e:
+            print(f"Bedrock converse call failed for model {model}: {e}")
+            raise e
 
     def _call_bedrock_agent(self, *, system_prompt: str, user_prompt: str) -> str:
         prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"

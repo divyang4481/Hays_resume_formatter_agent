@@ -111,7 +111,8 @@ function validateSubmissionForm() {
     const textPasted = document.getElementById('cv-text-input').value.trim().length > 0;
     const submitBtn = document.getElementById('btn-submit-job');
     
-    if (selectedTemplateId && (fileSelected || textPasted)) {
+    // Allow submitting even if template is not pre-selected (agent will suggest and pause for selection)
+    if (fileSelected || textPasted) {
         submitBtn.removeAttribute('disabled');
     } else {
         submitBtn.setAttribute('disabled', 'true');
@@ -193,7 +194,9 @@ async function submitResumeJob() {
         if (fileInput.files.length > 0) {
             // Multipart Form upload
             const formData = new FormData();
-            formData.append('template_id', selectedTemplateId);
+            if (selectedTemplateId) {
+                formData.append('template_id', selectedTemplateId);
+            }
             formData.append('file', fileInput.files[0]);
             
             res = await fetch(`${API_HOST}/format`, {
@@ -202,13 +205,16 @@ async function submitResumeJob() {
             });
         } else {
             // Paste Text JSON upload
+            const payload = {
+                resume_text: textInput.value.trim()
+            };
+            if (selectedTemplateId) {
+                payload.template_id = selectedTemplateId;
+            }
             res = await fetch(`${API_HOST}/format`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    template_id: selectedTemplateId,
-                    resume_text: textInput.value.trim()
-                })
+                body: JSON.stringify(payload)
             });
         }
         
@@ -293,6 +299,10 @@ function updatePipelineUI(job) {
     const cq = document.getElementById('connector-queued');
     const cp = document.getElementById('connector-processing');
     
+    // Reset selection box visibility
+    const selectionBox = document.getElementById('selection-box');
+    selectionBox.classList.add('hidden');
+    
     if (job.status === 'queued') {
         sq.className = 'stage-node active';
         sp.className = 'stage-node';
@@ -307,6 +317,25 @@ function updatePipelineUI(job) {
         cq.className = 'stage-connector completed';
         cp.className = 'stage-connector';
         statusMsg.textContent = 'Agent is reading candidate details & injecting variables XML-level...';
+    } else if (job.status === 'waiting_for_template_selection') {
+        sq.className = 'stage-node completed';
+        sp.className = 'stage-node active';
+        sc.className = 'stage-node';
+        cq.className = 'stage-connector completed';
+        cp.className = 'stage-connector';
+        statusMsg.textContent = 'Paused: Please select a corporate template below to continue.';
+        dot.className = 'status-dot pulsing';
+        
+        // Populate and show the selection box
+        const select = document.getElementById('pipeline-template-select');
+        select.innerHTML = '<option value="" disabled selected>-- Select a Template --</option>';
+        
+        // Load all available templates into the select dropdown
+        allTemplates.forEach(t => {
+            select.innerHTML += `<option value="${t.template_id}">${t.template_name} (v${t.version})</option>`;
+        });
+        
+        selectionBox.classList.remove('hidden');
     } else if (job.status === 'completed') {
         sq.className = 'stage-node completed';
         sp.className = 'stage-node completed';
@@ -333,6 +362,44 @@ function updatePipelineUI(job) {
         cp.className = 'stage-connector';
         dot.className = 'status-dot';
         statusMsg.innerHTML = `<span class="text-danger">Pipeline failed: ${job.error || 'Unknown rendering error'}</span>`;
+    }
+}
+
+// Handler to resume job processing after selecting a template in the paused pipeline state
+async function confirmTemplateSelection() {
+    const select = document.getElementById('pipeline-template-select');
+    const selectedId = select.value;
+    if (!selectedId) {
+        alert("Please select a template first.");
+        return;
+    }
+    
+    const confirmBtn = document.getElementById('btn-confirm-selection');
+    confirmBtn.setAttribute('disabled', 'true');
+    confirmBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Resuming...`;
+    
+    try {
+        const res = await fetch(`${API_HOST}/jobs/${currentJobId}/select-template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ template_id: selectedId })
+        });
+        
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || "Failed to resume formatting job.");
+        }
+        
+        // Hide selection box, show pulsing queued state, and restart polling!
+        document.getElementById('selection-box').classList.add('hidden');
+        showPipeline(currentJobId);
+        pollJobStatus();
+    } catch (e) {
+        console.error(e);
+        alert("Failed to confirm template selection: " + e.message);
+    } finally {
+        confirmBtn.removeAttribute('disabled');
+        confirmBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Confirm & Process`;
     }
 }
 

@@ -26,3 +26,5 @@ src/worker/__pycache__/agentic_core.cpython-311.pyc
 tests/__pycache__/test_templates.cpython-311-pytest-8.4.2.pyc
 venv/
 artifacts/
+src/shared/__pycache__/queue.cpython-311.pyc
+src/shared/__pycache__/storage.cpython-311.pyc
