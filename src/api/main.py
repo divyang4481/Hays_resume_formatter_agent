@@ -51,11 +51,13 @@ class AgentManifestResponse(BaseModel):
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
 
 
 @app.post("/admin/templates", response_model=TemplateCreateResponse)
+@app.post("/api/admin/templates", response_model=TemplateCreateResponse)
 async def upload_template(file: UploadFile = File(...)) -> TemplateCreateResponse:
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only DOCX templates are supported in MVP")
@@ -86,6 +88,7 @@ async def upload_template(file: UploadFile = File(...)) -> TemplateCreateRespons
 
 
 @app.post("/format", response_model=ResumeFormatResponse)
+@app.post("/api/format", response_model=ResumeFormatResponse)
 async def submit_format_job(request: Request) -> ResumeFormatResponse:
     content_type = request.headers.get("content-type", "")
     template_id = None
@@ -145,6 +148,7 @@ async def submit_format_job(request: Request) -> ResumeFormatResponse:
 
 
 @app.post("/jobs/{job_id}/select-template", response_model=ResumeFormatResponse)
+@app.post("/api/jobs/{job_id}/select-template", response_model=ResumeFormatResponse)
 def select_template(job_id: str, request: SelectTemplateRequest) -> ResumeFormatResponse:
     job = repo.get_job(job_id)
     if not job:
@@ -174,6 +178,7 @@ def select_template(job_id: str, request: SelectTemplateRequest) -> ResumeFormat
 
 
 @app.get("/jobs", response_model=JobListResponse)
+@app.get("/api/jobs", response_model=JobListResponse)
 def list_jobs(
     template_id: str | None = None,
     status: JobStatus | None = None,
@@ -185,6 +190,7 @@ def list_jobs(
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+@app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job(job_id: str) -> JobStatusResponse:
     job = repo.get_job(job_id)
     if not job:
@@ -193,6 +199,7 @@ def get_job(job_id: str) -> JobStatusResponse:
 
 
 @app.get("/jobs/{job_id}/download")
+@app.get("/api/jobs/{job_id}/download")
 def download_resume(job_id: str):
     job = repo.get_job(job_id)
     if not job:
@@ -221,6 +228,7 @@ def download_resume(job_id: str):
 
 
 @app.get("/templates/{template_id}/manifest")
+@app.get("/api/templates/{template_id}/manifest")
 def get_template_manifest(template_id: str) -> dict:
     manifest = repo.get_manifest(template_id)
     if not manifest:
@@ -229,12 +237,14 @@ def get_template_manifest(template_id: str) -> dict:
 
 
 @app.get("/templates", response_model=TemplateListResponse)
+@app.get("/api/templates", response_model=TemplateListResponse)
 def list_templates(limit: int = 10, offset: int = 0) -> TemplateListResponse:
     total, templates = repo.list_templates(limit=limit, offset=offset)
     return TemplateListResponse(total=total, limit=limit, offset=offset, templates=templates)
 
 
 @app.get("/templates/{template_id}", response_model=TemplateDetailResponse)
+@app.get("/api/templates/{template_id}", response_model=TemplateDetailResponse)
 def get_template_details(template_id: str) -> TemplateDetailResponse:
     template = repo.get_template(template_id)
     if not template:
@@ -251,6 +261,7 @@ def get_template_details(template_id: str) -> TemplateDetailResponse:
 
 
 @app.get("/.well-known/agent.json", response_model=AgentManifestResponse)
+@app.get("/api/.well-known/agent.json", response_model=AgentManifestResponse)
 def get_agent_manifest() -> AgentManifestResponse:
     return AgentManifestResponse(
         name="Hays Resume Formatter Agent",
@@ -272,6 +283,7 @@ def get_agent_manifest() -> AgentManifestResponse:
 
 
 @app.get("/mcp/manifest", response_model=AgentManifestResponse)
+@app.get("/api/mcp/manifest", response_model=AgentManifestResponse)
 def get_mcp_manifest() -> AgentManifestResponse:
     return get_agent_manifest()
 

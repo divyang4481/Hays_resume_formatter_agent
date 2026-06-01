@@ -25,7 +25,8 @@ class LLMClient:
             retries={"max_attempts": settings.bedrock_max_retries, "mode": "standard"},
         )
 
-        session = boto3.Session(profile_name=settings.aws_profile) if settings.aws_profile else boto3.Session()
+        profile = (settings.aws_profile or "").strip()
+        session = boto3.Session(profile_name=profile) if profile else boto3.Session()
         self._bedrock_runtime = session.client("bedrock-runtime", region_name=settings.aws_region, config=botocore_cfg)
         self._bedrock_agent_runtime = session.client("bedrock-agent-runtime", region_name=settings.aws_region, config=botocore_cfg)
         self.bedrock_agent_id = settings.bedrock_agent_id
@@ -518,9 +519,19 @@ class LLMClient:
         except Exception as e:
             message = str(e).lower()
             fallback_model = settings.bedrock_fallback_model_id
-            if "read timeout" in message and fallback_model and fallback_model != model:
+            should_retry_with_fallback = (
+                fallback_model
+                and fallback_model != model
+                and (
+                    "read timeout" in message
+                    or "on-demand throughput" in message
+                    or "inference profile" in message
+                    or "validationexception" in message
+                )
+            )
+            if should_retry_with_fallback:
                 print(
-                    f"Bedrock converse timed out for model {model}. Retrying once with fallback model {fallback_model}."
+                    f"Bedrock converse failed for model {model}. Retrying once with fallback model {fallback_model}."
                 )
                 return self._converse_with_usage(
                     model=fallback_model,

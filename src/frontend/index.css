@@ -502,6 +502,13 @@ body.route-admin .main-header {
     flex-direction: column;
     gap: 4px;
 }
+
+.job-action-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
 .template-fields-count {
     font-size: 12px;
     color: var(--text-muted);
@@ -956,7 +963,7 @@ body.route-admin .main-header {
     left: 0;
     width: 100vw;
     height: 100vh;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(15, 35, 58, 0.32);
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     z-index: 1000;
@@ -968,10 +975,10 @@ body.route-admin .main-header {
     width: 90%;
     max-width: 800px;
     max-height: 85vh;
-    background: var(--bg-glass);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.14);
     border-radius: var(--radius-premium);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    box-shadow: 0 22px 54px rgba(8, 30, 54, 0.18);
     display: flex;
     flex-direction: column;
     padding: 0;
@@ -981,11 +988,22 @@ body.route-admin .main-header {
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(0, 48, 94, 0.12);
+    background: linear-gradient(180deg, #ffffff 0%, #f6f9fd 100%);
+    position: sticky;
+    top: 0;
+    z-index: 3;
 }
 .modal-header h3 {
     font-family: var(--font-heading);
     font-size: 20px;
+    color: var(--color-primary);
+}
+
+.modal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 .btn-close {
     background: transparent;
@@ -1001,6 +1019,7 @@ body.route-admin .main-header {
 .modal-body {
     padding: 24px;
     overflow-y: auto;
+    background: #ffffff;
 }
 
 .manifest-stats {
@@ -1010,8 +1029,8 @@ body.route-admin .main-header {
     margin-bottom: 24px;
 }
 .stat-pill {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    background: #f8fbff;
+    border: 1px solid rgba(0, 48, 94, 0.11);
     border-radius: 10px;
     padding: 12px;
     text-align: center;
@@ -1033,7 +1052,7 @@ body.route-admin .main-header {
     font-family: var(--font-heading);
     font-size: 14px;
     margin-bottom: 12px;
-    color: var(--text-secondary);
+    color: var(--color-primary);
 }
 
 /* Animations */
@@ -1234,6 +1253,16 @@ body.route-admin .main-header {
     word-break: break-all;
 }
 
+.compact-json-modal {
+    max-width: 920px;
+}
+
+#recent-job-json-content {
+    max-height: 60vh;
+    margin-top: 0;
+    white-space: pre-wrap;
+}
+
 .progress-job-side {
     display: flex;
     flex-direction: column;
@@ -1285,8 +1314,8 @@ body.route-admin .main-header {
 }
 
 .detail-pill {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    background: #f8fbff;
+    border: 1px solid rgba(0, 48, 94, 0.11);
     border-radius: 10px;
     padding: 12px;
     min-width: 0;
@@ -1313,11 +1342,11 @@ body.route-admin .main-header {
     margin-top: 16px;
     max-height: 320px;
     overflow: auto;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0f2237;
+    border: 1px solid rgba(0, 48, 94, 0.28);
     border-radius: 12px;
     padding: 14px;
-    color: #cbd5e1;
+    color: #dbe9f7;
     font-size: 12px;
     line-height: 1.5;
 }
@@ -1350,6 +1379,15 @@ body.route-admin .main-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 14px;
+    }
+
+    .modal-header {
+        align-items: flex-start;
+    }
+
+    .modal-header-actions {
+        width: 100%;
+        justify-content: space-between;
     }
 }
 

@@ -466,9 +466,14 @@
                     <h3 id="modal-template-name">Template Manifest Overview</h3>
                     <span class="subtitle" id="modal-template-meta">Template ID: 12345 | Version: 1</span>
                 </div>
-                <button class="btn-close" onclick="closeManifestModal()" title="Close manifest modal" aria-label="Close manifest modal">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
+                <div class="modal-header-actions">
+                    <button id="modal-toggle-raw-btn" class="btn btn-outline btn-small" onclick="toggleRawManifest()" title="Toggle raw manifest panel" aria-label="Toggle raw manifest panel">
+                        <i class="fa-solid fa-code"></i> Show Raw Manifest
+                    </button>
+                    <button class="btn-close" onclick="closeManifestModal()" title="Close manifest modal" aria-label="Close manifest modal">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
             </div>
 
             <div class="modal-body">
@@ -505,9 +510,6 @@
                 <div class="fields-list-wrapper">
                     <div class="manifest-section-header">
                         <h4>Fields Schema Dictionary</h4>
-                        <button class="btn btn-outline btn-small" onclick="toggleRawManifest()">
-                            <i class="fa-solid fa-code"></i> Toggle Raw Manifest
-                        </button>
                     </div>
                     <div class="table-container">
                         <table class="custom-table compact">
@@ -528,6 +530,26 @@
                     </div>
                     <pre class="raw-manifest hidden" id="modal-raw-manifest"></pre>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Job Extracted Data Modal -->
+    <div class="modal-backdrop hidden" id="recent-job-json-modal" onclick="closeRecentJobJsonModal(event)">
+        <div class="glass-card modal-content animate-slide-up compact-json-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3 id="recent-job-json-title">Extracted Data JSON</h3>
+                    <span class="subtitle" id="recent-job-json-meta">Job ID: -</span>
+                </div>
+                <div class="modal-header-actions">
+                    <button class="btn-close" onclick="closeRecentJobJsonModal()" title="Close extracted data modal" aria-label="Close extracted data modal">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <pre class="raw-manifest" id="recent-job-json-content">{}</pre>
             </div>
         </div>
     </div>

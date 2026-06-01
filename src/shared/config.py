@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     llm_backend: str = "aws_bedrock"
 
     aws_region: str = "ap-south-1"
-    aws_profile: str = "default"
+    aws_profile: str = ""
 
     s3_bucket: str = "hays-resume-agent-dev"
     s3_bucket_input: str = ""

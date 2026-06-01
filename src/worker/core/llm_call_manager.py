@@ -43,14 +43,20 @@ class LLMCallManager:
             )
 
         start_time = time.time()
+        text = ""
+        usage: dict[str, int] = {}
+        call_error: Exception | None = None
 
-        text, usage = llm_client._call_bedrock_with_usage(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        try:
+            text, usage = llm_client._call_bedrock_with_usage(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as e:
+            call_error = e
 
         if settings.llm_log_prompts:
             print("\n[LLMCallManager] ===== LLM PROMPT START =====")
@@ -61,27 +67,39 @@ class LLMCallManager:
             print(self._truncate_for_log(user_prompt))
             print("[LLMCallManager] --- MODEL RESPONSE ---")
             print(self._truncate_for_log(text))
+            if call_error:
+                print("[LLMCallManager] --- MODEL ERROR ---")
+                print(self._truncate_for_log(str(call_error)))
             print("[LLMCallManager] ===== LLM PROMPT END =====\n")
 
         latency = time.time() - start_time
 
         input_tokens = usage.get("input_tokens") or self.estimate_tokens(system_prompt + user_prompt)
-        output_tokens = usage.get("output_tokens") or self.estimate_tokens(text)
+        output_tokens = usage.get("output_tokens") or (self.estimate_tokens(text) if text else 0)
 
-        repo.save_llm_call(
-            model_id=model,
-            prompt_system=system_prompt,
-            prompt_user=user_prompt,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            latency_seconds=latency,
-        )
+        prompt_user_for_log = user_prompt
+        if call_error:
+            prompt_user_for_log = f"{user_prompt}\n\n[LLM_CALL_ERROR] {str(call_error)}"
 
-        print(
-            f"[LLMCallManager] Call recorded: model={model}, "
-            f"input_tokens={input_tokens}, output_tokens={output_tokens}, "
-            f"latency={latency:.2f}s"
-        )
+        try:
+            repo.save_llm_call(
+                model_id=model,
+                prompt_system=system_prompt,
+                prompt_user=prompt_user_for_log,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_seconds=latency,
+            )
+            print(
+                f"[LLMCallManager] Call recorded: model={model}, "
+                f"input_tokens={input_tokens}, output_tokens={output_tokens}, "
+                f"latency={latency:.2f}s, success={call_error is None}"
+            )
+        except Exception as log_err:
+            print(f"[LLMCallManager] Failed to persist LLM call log: {log_err}")
+
+        if call_error:
+            raise call_error
         return text
 
 

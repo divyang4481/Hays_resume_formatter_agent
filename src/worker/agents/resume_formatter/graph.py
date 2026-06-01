@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 from uuid import uuid4
 from datetime import datetime, timezone
+import re
 
 from langgraph.graph import END, StateGraph
 
@@ -42,6 +43,176 @@ class ResumeFormatState(TypedDict):
 
 def _is_empty_mapped_value(value: Any) -> bool:
     return value in (None, "", [])
+
+
+def _first_non_empty_resume_lines(raw_resume_text: str, limit: int = 12) -> list[str]:
+    lines = [line.strip(" -\t") for line in raw_resume_text.splitlines() if line.strip()]
+    return lines[:limit]
+
+
+def _extract_name_candidate(raw_resume_text: str) -> str | None:
+    email_re = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    phone_re = re.compile(r"\+?\d[\d\s()\-]{6,}\d")
+    for line in _first_non_empty_resume_lines(raw_resume_text, limit=8):
+        if email_re.search(line) or phone_re.search(line):
+            continue
+        if len(line) < 3 or len(line) > 70:
+            continue
+        # Prefer title-case looking lines for candidate names.
+        alpha_words = [w for w in re.split(r"\s+", line) if w.isalpha()]
+        if len(alpha_words) >= 2:
+            return line
+    return None
+
+
+def _collect_section_lines(raw_resume_text: str, heading_terms: list[str], max_lines: int = 8) -> list[str]:
+    lines = [line.strip() for line in raw_resume_text.splitlines()]
+    if not lines:
+        return []
+
+    lowered_headings = [t.lower() for t in heading_terms]
+    collected: list[str] = []
+    in_section = False
+
+    for line in lines:
+        normalized = re.sub(r"\s+", " ", line).strip()
+        low = normalized.lower()
+        if not normalized:
+            if in_section and collected:
+                break
+            continue
+
+        is_new_heading = any(h in low for h in lowered_headings)
+        looks_like_heading = len(normalized) <= 60 and normalized.endswith(":")
+
+        if is_new_heading:
+            in_section = True
+            continue
+
+        if in_section and looks_like_heading:
+            break
+
+        if in_section:
+            item = normalized.lstrip("-•* ").strip()
+            if item:
+                collected.append(item)
+            if len(collected) >= max_lines:
+                break
+
+    return collected
+
+
+def _extract_skills(raw_resume_text: str) -> list[str]:
+    skill_lines = _collect_section_lines(
+        raw_resume_text,
+        ["key skills", "skills", "core skills", "technical skills", "competencies", "expertise"],
+        max_lines=10,
+    )
+    if not skill_lines:
+        return []
+
+    skills: list[str] = []
+    for line in skill_lines:
+        parts = [p.strip() for p in re.split(r"[,|;]", line) if p.strip()]
+        if len(parts) > 1:
+            skills.extend(parts)
+        else:
+            skills.append(line)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for skill in skills:
+        key = skill.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(skill)
+    return deduped[:12]
+
+
+def _extract_qualifications(raw_resume_text: str) -> list[str]:
+    qual_lines = _collect_section_lines(
+        raw_resume_text,
+        ["professional qualifications", "qualifications", "certifications", "certificates", "accreditation"],
+        max_lines=10,
+    )
+    return [q for q in qual_lines if q][:8]
+
+
+def _heuristic_value_for_field(field: dict[str, Any], raw_resume_text: str) -> Any:
+    semantic = " ".join(
+        str(field.get(k) or "")
+        for k in ("name", "display_label", "source_hint", "template_token")
+    ).lower()
+    field_type = str(field.get("field_type") or "scalar").lower()
+
+    if "candidate_name" in semantic or "full name" in semantic:
+        return _extract_name_candidate(raw_resume_text)
+
+    if "skill" in semantic:
+        skills = _extract_skills(raw_resume_text)
+        if not skills:
+            return None
+        if field_type.startswith("array"):
+            return skills
+        return ", ".join(skills)
+
+    if any(term in semantic for term in ("professional_qualification", "professional qualification", "certification", "qualification")):
+        quals = _extract_qualifications(raw_resume_text)
+        if not quals:
+            return None
+        if field_type.startswith("array"):
+            # Preserve shape expected by array_object fields.
+            return [{"check_type": q} for q in quals]
+        return ", ".join(quals)
+
+    if "notice" in semantic:
+        match = re.search(r"(immediate|\d+\s*(?:day|week|month)s?)", raw_resume_text, flags=re.IGNORECASE)
+        return match.group(1).strip() if match else None
+
+    if "salary" in semantic:
+        match = re.search(r"(?:£|\$|EUR|INR|Rs\.?)[\s]*[0-9][0-9,\.]*", raw_resume_text, flags=re.IGNORECASE)
+        return match.group(0).strip() if match else None
+
+    if any(term in semantic for term in ("town", "city", "location")):
+        lines = _first_non_empty_resume_lines(raw_resume_text, limit=10)
+        for line in lines:
+            if re.search(r"\b(?:london|manchester|birmingham|leeds|bristol|glasgow)\b", line, flags=re.IGNORECASE):
+                return line
+
+    return None
+
+
+def _apply_heuristic_resume_fact_fallback(
+    *,
+    fields: list[dict[str, Any]],
+    field_mappings: dict[str, Any],
+    raw_resume_text: str,
+) -> int:
+    applied = 0
+    for field in fields:
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        existing_value = (field_mappings.get(name) or {}).get("value")
+        if not _is_empty_mapped_value(existing_value):
+            continue
+
+        heuristic_value = _heuristic_value_for_field(field, raw_resume_text)
+        if _is_empty_mapped_value(heuristic_value):
+            continue
+
+        field_mappings[name] = {
+            "value": heuristic_value,
+            "status": "mapped",
+            "confidence": 0.45,
+            "source": {
+                "page": 1,
+                "section": "Heuristic Fallback",
+                "evidence_text": "Recovered from deterministic resume parsing fallback.",
+            },
+        }
+        applied += 1
+    return applied
 
 
 def _is_instruction_resume_field(field: dict[str, Any]) -> bool:
@@ -154,7 +325,21 @@ def create_resume_summary(state: ResumeFormatState) -> ResumeFormatState:
 
     # Safe fallback when LLM is unavailable.
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    summary = " | ".join(lines[:3]).strip() if lines else ""
+    lead = _extract_name_candidate(raw_text) or (lines[0] if lines else "Candidate")
+    highlights = []
+    skills = _extract_skills(raw_text)
+    if skills:
+        highlights.append(f"Skills: {', '.join(skills[:6])}")
+    quals = _extract_qualifications(raw_text)
+    if quals:
+        highlights.append(f"Qualifications: {', '.join(quals[:3])}")
+
+    summary = f"{lead}."
+    if highlights:
+        summary = f"{summary} {' | '.join(highlights)}"
+    elif len(lines) > 1:
+        summary = f"{summary} {lines[1][:220]}"
+
     if len(summary) > 500:
         summary = summary[:497].rstrip() + "..."
     state["resume_summary"] = summary or None
@@ -270,6 +455,15 @@ def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
         except Exception as e:
             print(f"[ExtractData] Focused retry failed ({e})")
 
+    # Deterministic semantic fallback for still-missing key fields.
+    heuristic_recovered = _apply_heuristic_resume_fact_fallback(
+        fields=fields,
+        field_mappings=field_mappings,
+        raw_resume_text=raw_text,
+    )
+    if heuristic_recovered:
+        print(f"[ExtractData] Heuristic fallback recovered {heuristic_recovered} fields")
+
     state["resume_fact_result"] = extracted
     
     # Ensure candidate_own_cv is populated with the original resume text
@@ -313,6 +507,38 @@ def extract_generated_fields(state: ResumeFormatState) -> ResumeFormatState:
     except Exception as e:
         print(f"[ExtractData] Generated-field LLM failed ({e}), using empty fallback")
         extracted = {"field_mappings": {}}
+
+    # Backfill generated narrative fields with a deterministic summary when missing.
+    generated_mappings = extracted.setdefault("field_mappings", {})
+    fallback_summary = (state.get("resume_summary") or "").strip()
+    if fallback_summary:
+        filled = 0
+        for field in fields:
+            name = str(field.get("name") or "").strip()
+            if not name:
+                continue
+            existing_value = (generated_mappings.get(name) or {}).get("value")
+            if not _is_empty_mapped_value(existing_value):
+                continue
+
+            semantic = " ".join(
+                str(field.get(k) or "")
+                for k in ("name", "display_label", "source_hint", "template_token")
+            ).lower()
+            if any(term in semantic for term in ("opinion", "summary", "profile", "expert")):
+                generated_mappings[name] = {
+                    "value": fallback_summary,
+                    "status": "mapped",
+                    "confidence": 0.35,
+                    "source": {
+                        "page": 1,
+                        "section": "Deterministic Generated Fallback",
+                        "evidence_text": "Filled from deterministic resume summary due LLM unavailability.",
+                    },
+                }
+                filled += 1
+        if filled:
+            print(f"[ExtractData] Deterministic generated fallback filled {filled} fields")
 
     state["generated_result"] = extracted
     return state

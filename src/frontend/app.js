@@ -5,6 +5,7 @@ let currentJobId = null;
 let pollInterval = null;
 let allTemplates = [];
 let adminJobs = [];
+let recentJobsById = {};
 let adminJobPollInterval = null;
 let activeAdminView = 'templates';
 let agentManifest = null;
@@ -789,6 +790,10 @@ async function loadRecentJobs() {
         const data = await res.json();
 
         const resumeJobs = (data.jobs || []).filter(job => job.job_type === 'resume_format');
+        recentJobsById = {};
+        resumeJobs.forEach(job => {
+            recentJobsById[job.job_id] = job;
+        });
         if (resumeJobs.length === 0) {
             tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No formatting jobs have been executed yet.</td></tr>`;
             return;
@@ -801,12 +806,16 @@ async function loadRecentJobs() {
             const templateName = getTemplateNameById(job.template_id);
             const formattedDate = formatDate(job.created_at);
 
-            let actionBtn = '';
-            if (job.status === 'completed') {
-                actionBtn = `<a href="${API_HOST}/jobs/${escapeHtml(job.job_id)}/download" class="btn btn-outline btn-small"><i class="fa-solid fa-download"></i> Download</a>`;
-            } else {
-                actionBtn = `<button class="btn btn-outline btn-small" onclick="trackExistingJob('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-eye"></i> Track</button>`;
+            const actionButtons = [];
+            if (job.extracted_data) {
+                actionButtons.push(`<button class="btn btn-outline btn-small" onclick="showRecentJobJson('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-code"></i> View Data</button>`);
             }
+            if (job.status === 'completed') {
+                actionButtons.push(`<a href="${API_HOST}/jobs/${escapeHtml(job.job_id)}/download" class="btn btn-outline btn-small"><i class="fa-solid fa-download"></i> Download</a>`);
+            } else {
+                actionButtons.push(`<button class="btn btn-outline btn-small" onclick="trackExistingJob('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-eye"></i> Track</button>`);
+            }
+            const actionBtn = `<div class="job-action-group">${actionButtons.join('')}</div>`;
 
             return `
                 <tr>
@@ -823,6 +832,30 @@ async function loadRecentJobs() {
         console.error(err);
         tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Error fetching pipeline history.</td></tr>`;
     }
+}
+
+function showRecentJobJson(jobId) {
+    const job = recentJobsById[jobId];
+    if (!job) {
+        alert('Job not found in recent list. Please refresh.');
+        return;
+    }
+    if (!job.extracted_data) {
+        alert('No extracted_data is available for this job yet.');
+        return;
+    }
+
+    document.getElementById('recent-job-json-title').textContent = 'Extracted Data JSON';
+    document.getElementById('recent-job-json-meta').textContent = `Job ID: ${jobId} | Status: ${job.status}`;
+    document.getElementById('recent-job-json-content').textContent = JSON.stringify(job.extracted_data, null, 2);
+    document.getElementById('recent-job-json-modal').classList.remove('hidden');
+}
+
+function closeRecentJobJsonModal(event) {
+    if (event && event.target && event.target.id !== 'recent-job-json-modal') {
+        return;
+    }
+    document.getElementById('recent-job-json-modal').classList.add('hidden');
 }
 
 function getTemplateNameById(templateId) {
@@ -1137,6 +1170,11 @@ async function inspectManifest(templateId) {
         }
 
         document.getElementById('modal-raw-manifest').classList.add('hidden');
+        const toggleBtn = document.getElementById('modal-toggle-raw-btn');
+        if (toggleBtn) {
+            toggleBtn.innerHTML = '<i class="fa-solid fa-code"></i> Show Raw Manifest';
+            toggleBtn.setAttribute('aria-pressed', 'false');
+        }
         document.getElementById('manifest-modal').classList.remove('hidden');
     } catch (err) {
         alert("Error retrieving manifest details: " + err.message);
@@ -1148,7 +1186,17 @@ function getManifestFields(tpl) {
 }
 
 function toggleRawManifest() {
-    document.getElementById('modal-raw-manifest').classList.toggle('hidden');
+    const rawManifest = document.getElementById('modal-raw-manifest');
+    const toggleBtn = document.getElementById('modal-toggle-raw-btn');
+    if (!rawManifest) return;
+
+    const nowVisible = rawManifest.classList.toggle('hidden') === false;
+    if (toggleBtn) {
+        toggleBtn.innerHTML = nowVisible
+            ? '<i class="fa-solid fa-code"></i> Hide Raw Manifest'
+            : '<i class="fa-solid fa-code"></i> Show Raw Manifest';
+        toggleBtn.setAttribute('aria-pressed', String(nowVisible));
+    }
 }
 
 function closeManifestModal() {
