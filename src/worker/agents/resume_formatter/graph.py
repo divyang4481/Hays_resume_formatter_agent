@@ -44,6 +44,58 @@ def _is_empty_mapped_value(value: Any) -> bool:
     return value in (None, "", [])
 
 
+def _is_instruction_resume_field(field: dict[str, Any]) -> bool:
+    render_strategy = str((field.get("render_contract") or {}).get("render_strategy") or "").strip().lower()
+    if render_strategy == "remove_instruction_text":
+        return True
+
+    evidence = field.get("template_evidence") or {}
+    region_type = str(evidence.get("region_type") or "").strip().lower()
+    if region_type == "instruction_region":
+        return True
+
+    text_probe = " ".join(
+        str(field.get(k) or "")
+        for k in ("name", "display_label", "template_token", "source_hint")
+    ).lower()
+    return "candidate_own_cv" in text_probe
+
+
+def _apply_instruction_resume_fields(
+    *,
+    manifest_fields: list[dict[str, Any]],
+    field_mappings: dict[str, dict[str, Any]],
+    raw_resume_text: str,
+) -> int:
+    if not raw_resume_text.strip():
+        return 0
+
+    applied = 0
+    for field in manifest_fields:
+        if not isinstance(field, dict):
+            continue
+        if not _is_instruction_resume_field(field):
+            continue
+
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+
+        field_mappings[name] = {
+            "value": raw_resume_text,
+            "status": "mapped",
+            "confidence": 1.0,
+            "source": {
+                "page": 1,
+                "section": "Original CV",
+                "evidence_text": "Full original resume text injected for instruction field.",
+            },
+        }
+        applied += 1
+
+    return applied
+
+
 # ---------------------------------------------------------------------------
 # Graph nodes
 # ---------------------------------------------------------------------------
@@ -280,6 +332,25 @@ def prepare_input_placeholder_sources(state: ResumeFormatState) -> ResumeFormatS
     return state
 
 
+def apply_instruction_resume_fields(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+
+    raw_text = state.get("raw_resume_text") or ""
+    manifest_fields = (state.get("manifest") or {}).get("fields", []) or []
+    resume_fact_mappings = (state.get("resume_fact_result") or {}).setdefault("field_mappings", {})
+
+    applied = _apply_instruction_resume_fields(
+        manifest_fields=manifest_fields,
+        field_mappings=resume_fact_mappings,
+        raw_resume_text=raw_text,
+    )
+    if applied:
+        print(f"[InstructionFields] Applied full resume text to {applied} instruction field(s)")
+
+    return state
+
+
 def merge_extracted_sources(state: ResumeFormatState) -> ResumeFormatState:
     if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
         return state
@@ -373,6 +444,7 @@ def build_resume_format_graph():
     graph.add_node("extract_resume_fact_fields", extract_resume_fact_fields)
     graph.add_node("extract_generated_fields", extract_generated_fields)
     graph.add_node("prepare_input_placeholder_sources", prepare_input_placeholder_sources)
+    graph.add_node("apply_instruction_resume_fields", apply_instruction_resume_fields)
     graph.add_node("merge_extracted_sources", merge_extracted_sources)
     graph.add_node("build_render_payload", build_render_payload)
     graph.add_node("render_resume", render_resume)
@@ -389,7 +461,8 @@ def build_resume_format_graph():
     graph.add_edge("split_manifest_fields_by_source_classification", "extract_resume_fact_fields")
     graph.add_edge("extract_resume_fact_fields", "extract_generated_fields")
     graph.add_edge("extract_generated_fields", "prepare_input_placeholder_sources")
-    graph.add_edge("prepare_input_placeholder_sources", "merge_extracted_sources")
+    graph.add_edge("prepare_input_placeholder_sources", "apply_instruction_resume_fields")
+    graph.add_edge("apply_instruction_resume_fields", "merge_extracted_sources")
     graph.add_edge("merge_extracted_sources", "build_render_payload")
     graph.add_edge("build_render_payload", "render_resume")
     graph.add_edge("render_resume", END)
