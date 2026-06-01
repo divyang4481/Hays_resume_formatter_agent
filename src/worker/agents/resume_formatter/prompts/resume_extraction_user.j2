@@ -10,5 +10,13 @@ Map resume data to the manifest fields below.
 {{ resume_text }}
 ```
 
+Instructions:
+- If a field has field_type "array_object", extract all visible entries from the resume into a JSON array of objects.
+- Use the sub_fields in each array_object field as the object keys.
+- For work experience fields, each array item should represent one role or employment entry.
+- For array fields, return a JSON array of strings.
+- For scalar fields, return a single string.
+- If a field cannot be confidently extracted, return an empty string, empty array, or empty object matching its shape.
+
 Return ONLY strict minified JSON under key "extracted" without any indentation or pretty-printing spaces:
 {"extracted":{"field_name":"value or structure"}}

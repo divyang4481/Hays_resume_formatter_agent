@@ -2,11 +2,14 @@
 
 ## Endpoints
 
-- `GET /health`
-- `POST /admin/templates` (DOCX upload)
-- `POST /format` (submit resume formatting job)
-- `GET /jobs/{job_id}`
-- `GET /templates/{template_id}/manifest`
+- Browser-facing POC routes are served under `/api` through the frontend proxy.
+- `GET /api/health`
+- `POST /api/admin/templates` (DOCX upload)
+- `POST /api/format` (submit resume formatting job)
+- `GET /api/jobs/{job_id}`
+- `GET /api/templates/{template_id}/manifest`
+- `GET /api/.well-known/agent.json` (agent discovery metadata)
+- `GET /api/mcp/manifest` (alias for agent discovery metadata)
 
 ## Example: Submit format job
 

@@ -113,6 +113,7 @@ class InMemoryRepository:
             template_id=template_id,
             resume_text=resume_text,
             resume_object_key=resume_object_key,
+            resume_summary=None,
         )
         with self._lock:
             self.jobs[job.job_id] = job
@@ -128,6 +129,7 @@ class InMemoryRepository:
         template_id: str | None = None,
         suggested_templates: list[dict] | None = None,
         extracted_data: dict[str, Any] | None = None,
+        resume_summary: str | None = None,
     ) -> None:
         with self._lock:
             current = self.jobs[job_id]
@@ -138,6 +140,7 @@ class InMemoryRepository:
                     "error": error,
                     "output_object_key": output_object_key,
                     "template_id": template_id if template_id is not None else current.template_id,
+                    "resume_summary": resume_summary if resume_summary is not None else current.resume_summary,
                     "suggested_templates": suggested_templates if suggested_templates is not None else current.suggested_templates,
                     "extracted_data": extracted_data if extracted_data is not None else current.extracted_data,
                 }
@@ -201,6 +204,7 @@ class PostgresRepository:
             template_id TEXT NULL,
             resume_text TEXT NULL,
             resume_object_key TEXT NULL,
+            resume_summary TEXT NULL,
             suggested_templates JSONB NULL,
             extracted_data JSONB NULL
         );
@@ -218,6 +222,7 @@ class PostgresRepository:
         """
         with self.engine.begin() as conn:
             conn.execute(text(ddl))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resume_summary TEXT NULL"))
 
     def create_template(self, *, template_name: str, object_key: str) -> tuple[str, int]:
         template_id = str(uuid4())
@@ -319,13 +324,14 @@ class PostgresRepository:
             template_id=template_id,
             resume_text=resume_text,
             resume_object_key=resume_object_key,
+            resume_summary=None,
         )
         with self.engine.begin() as conn:
             conn.execute(
                 text(
                     """
-                    INSERT INTO jobs (job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, suggested_templates, extracted_data)
-                    VALUES (:job_id, :job_type, :status, :created_at, :updated_at, :error, :output_object_key, :template_id, :resume_text, :resume_object_key, :suggested_templates, :extracted_data)
+                    INSERT INTO jobs (job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data)
+                    VALUES (:job_id, :job_type, :status, :created_at, :updated_at, :error, :output_object_key, :template_id, :resume_text, :resume_object_key, :resume_summary, :suggested_templates, :extracted_data)
                     """
                 ),
                 {
@@ -339,6 +345,7 @@ class PostgresRepository:
                     "template_id": job.template_id,
                     "resume_text": job.resume_text,
                     "resume_object_key": job.resume_object_key,
+                    "resume_summary": job.resume_summary,
                     "suggested_templates": json.dumps(job.suggested_templates) if job.suggested_templates else None,
                     "extracted_data": None,
                 },
@@ -355,18 +362,21 @@ class PostgresRepository:
         template_id: str | None = None,
         suggested_templates: list[dict] | None = None,
         extracted_data: dict[str, Any] | None = None,
+        resume_summary: str | None = None,
     ) -> None:
         with self.engine.begin() as conn:
             row = conn.execute(
-                text("SELECT template_id, suggested_templates, extracted_data FROM jobs WHERE job_id = :job_id"),
+                text("SELECT template_id, resume_summary, suggested_templates, extracted_data FROM jobs WHERE job_id = :job_id"),
                 {"job_id": job_id}
             ).mappings().first()
             
             existing_template_id = row["template_id"] if row else None
+            existing_resume_summary = row["resume_summary"] if row else None
             existing_suggested_templates = row["suggested_templates"] if row else None
             existing_extracted_data = row["extracted_data"] if row else None
             
             final_template_id = template_id if template_id is not None else existing_template_id
+            final_resume_summary = resume_summary if resume_summary is not None else existing_resume_summary
             
             if suggested_templates is not None:
                 final_suggested_templates = json.dumps(suggested_templates)
@@ -397,6 +407,7 @@ class PostgresRepository:
                         error = :error,
                         output_object_key = :output_object_key,
                         template_id = :template_id,
+                        resume_summary = :resume_summary,
                         suggested_templates = CAST(:suggested_templates AS JSONB),
                         extracted_data = CAST(:extracted_data AS JSONB)
                     WHERE job_id = :job_id
@@ -409,6 +420,7 @@ class PostgresRepository:
                     "error": error,
                     "output_object_key": output_object_key,
                     "template_id": final_template_id,
+                    "resume_summary": final_resume_summary,
                     "suggested_templates": final_suggested_templates,
                     "extracted_data": final_extracted_data,
                 },
@@ -419,7 +431,7 @@ class PostgresRepository:
             row = conn.execute(
                 text(
                     """
-                    SELECT job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, suggested_templates, extracted_data
+                    SELECT job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data
                     FROM jobs WHERE job_id = :job_id
                     """
                 ),
@@ -455,6 +467,7 @@ class PostgresRepository:
             template_id=row["template_id"],
             resume_text=row["resume_text"],
             resume_object_key=row["resume_object_key"],
+            resume_summary=row.get("resume_summary"),
             suggested_templates=suggested_list,
             extracted_data=extracted_dict,
         )
@@ -523,6 +536,7 @@ class PostgresRepository:
                     template_id=row["template_id"],
                     resume_text=row["resume_text"],
                     resume_object_key=row["resume_object_key"],
+                    resume_summary=row.get("resume_summary"),
                     suggested_templates=suggested_list,
                     extracted_data=extracted_dict,
                 )

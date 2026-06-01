@@ -19,8 +19,18 @@ class ResumeFormatState(TypedDict):
     resume_text: str | None
     resume_object_key: str | None
     raw_resume_text: str | None
+    resume_summary: str | None
     suggested_templates: list[dict]
     manifest: dict[str, Any] | None
+    resume_fact_fields: list[dict[str, Any]]
+    generated_fields: list[dict[str, Any]]
+    input_only_fields: list[dict[str, Any]]
+    recruiter_input_fields: list[dict[str, Any]]
+    ats_input_fields: list[dict[str, Any]]
+    resume_fact_result: dict[str, Any]
+    generated_result: dict[str, Any]
+    recruiter_input_result: dict[str, Any]
+    ats_input_result: dict[str, Any]
     mapping_result: dict[str, Any]
     render_payload: dict[str, Any]
     extracted: dict[str, Any]
@@ -65,6 +75,36 @@ def resolve_or_suggest_template(state: ResumeFormatState) -> ResumeFormatState:
     return state
 
 
+def create_resume_summary(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") == JobStatus.FAILED:
+        return state
+
+    raw_text = (state.get("raw_resume_text") or "").strip()
+    if not raw_text:
+        state["resume_summary"] = None
+        return state
+
+    try:
+        agentic_core = AgenticCore()
+        summary = agentic_core.summarize_resume(
+            resume_text=raw_text,
+            use_strong_model=True,
+        )
+        if summary:
+            state["resume_summary"] = summary
+            return state
+    except Exception as e:
+        print(f"[ResumeSummary] LLM summary generation failed ({e}), using deterministic fallback")
+
+    # Safe fallback when LLM is unavailable.
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    summary = " | ".join(lines[:3]).strip() if lines else ""
+    if len(summary) > 500:
+        summary = summary[:497].rstrip() + "..."
+    state["resume_summary"] = summary or None
+    return state
+
+
 def load_template_manifest(state: ResumeFormatState) -> ResumeFormatState:
     if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
         return state
@@ -84,15 +124,48 @@ def load_template_manifest(state: ResumeFormatState) -> ResumeFormatState:
     return state
 
 
-def map_resume_to_manifest(state: ResumeFormatState) -> ResumeFormatState:
+def split_manifest_fields_by_source_classification(state: ResumeFormatState) -> ResumeFormatState:
     if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
         return state
 
     manifest = state.get("manifest") or {"fields": []}
     fields = manifest.get("fields", [])
-    raw_text = state.get("raw_resume_text") or ""
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "resume_fact": [],
+        "generated": [],
+        "input_only": [],
+        "recruiter_input": [],
+        "ats_input": [],
+    }
 
-    print(f"[ExtractData] Extracting values for {len(fields)} manifest fields...")
+    for field in fields:
+        classification = str(field.get("source_classification", "resume_fact")).strip().lower()
+        if classification not in buckets:
+            classification = "resume_fact"
+        buckets[classification].append(field)
+
+    state["resume_fact_fields"] = buckets["resume_fact"]
+    state["generated_fields"] = buckets["generated"]
+    state["input_only_fields"] = buckets["input_only"]
+    state["recruiter_input_fields"] = buckets["recruiter_input"]
+    state["ats_input_fields"] = buckets["ats_input"]
+
+    print(
+        f"[FieldSplit] resume_fact={len(buckets['resume_fact'])} generated={len(buckets['generated'])} "
+        f"input_only={len(buckets['input_only'])} recruiter_input={len(buckets['recruiter_input'])} "
+        f"ats_input={len(buckets['ats_input'])}"
+    )
+    return state
+
+
+def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+
+    raw_text = state.get("raw_resume_text") or ""
+    fields = state.get("resume_fact_fields") or []
+
+    print(f"[ExtractData] Extracting resume_fact values for {len(fields)} fields...")
     agentic_core = AgenticCore()
     try:
         extracted = agentic_core.extract_resume_fields(
@@ -110,11 +183,11 @@ def map_resume_to_manifest(state: ResumeFormatState) -> ResumeFormatState:
             "candidate_email": {"value": next((x for x in lines if "@" in x), "")},
         }}
 
-    state["mapping_result"] = extracted
+    state["resume_fact_result"] = extracted
     
     # Ensure candidate_own_cv is populated with the original resume text
     field_mappings = extracted.setdefault("field_mappings", {})
-    if "candidate_own_cv" in [f.get("name") for f in fields]:
+    if "candidate_own_cv" in [f.get("name") for f in (state.get("manifest") or {}).get("fields", [])]:
         if "candidate_own_cv" not in field_mappings or field_mappings["candidate_own_cv"].get("value") is None:
             field_mappings["candidate_own_cv"] = {
                 "value": raw_text,
@@ -123,7 +196,68 @@ def map_resume_to_manifest(state: ResumeFormatState) -> ResumeFormatState:
                 "source": {"page": 1, "section": "Original CV", "evidence_text": "Full original resume text injected."}
             }
 
-    state["extracted"] = {k: v.get("value") for k, v in field_mappings.items()}
+    return state
+
+
+def extract_generated_fields(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+
+    fields = state.get("generated_fields") or []
+    if not fields:
+        state["generated_result"] = {"field_mappings": {}}
+        print("[ExtractData] No generated fields present.")
+        return state
+
+    raw_text = state.get("raw_resume_text") or ""
+    resume_fact_values = {
+        k: v.get("value")
+        for k, v in (state.get("resume_fact_result") or {}).get("field_mappings", {}).items()
+    }
+
+    print(f"[ExtractData] Generating values for {len(fields)} generated fields...")
+    agentic_core = AgenticCore()
+    try:
+        extracted = agentic_core.generate_resume_fields(
+            fields=fields,
+            resume_text=raw_text,
+            resume_fact_values=resume_fact_values,
+            use_strong_model=True,
+        )
+    except Exception as e:
+        print(f"[ExtractData] Generated-field LLM failed ({e}), using empty fallback")
+        extracted = {"field_mappings": {}}
+
+    state["generated_result"] = extracted
+    return state
+
+
+def prepare_input_placeholder_sources(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+
+    print(
+        f"[InputPlaceholder] input_only={len(state.get('input_only_fields') or [])} "
+        f"recruiter_input={len(state.get('recruiter_input_fields') or [])} "
+        f"ats_input={len(state.get('ats_input_fields') or [])}"
+    )
+    state["recruiter_input_result"] = {"field_mappings": {}}
+    state["ats_input_result"] = {"field_mappings": {}}
+    return state
+
+
+def merge_extracted_sources(state: ResumeFormatState) -> ResumeFormatState:
+    if state.get("status") in [JobStatus.FAILED, JobStatus.WAITING_FOR_TEMPLATE_SELECTION]:
+        return state
+
+    merged: dict[str, Any] = {"field_mappings": {}}
+    for source_name in ("resume_fact_result", "generated_result", "recruiter_input_result", "ats_input_result"):
+        source_payload = state.get(source_name) or {}
+        for key, value in (source_payload.get("field_mappings", {}) or {}).items():
+            merged["field_mappings"][key] = value
+
+    state["mapping_result"] = merged
+    state["extracted"] = {k: v.get("value") for k, v in merged["field_mappings"].items()}
     return state
 
 
@@ -132,7 +266,9 @@ def build_render_payload(state: ResumeFormatState) -> ResumeFormatState:
         return state
     manifest = state.get("manifest") or {"fields": []}
     mapping_result = state.get("mapping_result") or {}
-    payload = build_filled_template_payload(manifest, mapping_result)
+    recruiter_input = {k: v.get("value") for k, v in (state.get("recruiter_input_result") or {}).get("field_mappings", {}).items()}
+    ats_input = {k: v.get("value") for k, v in (state.get("ats_input_result") or {}).get("field_mappings", {}).items()}
+    payload = build_filled_template_payload(manifest, mapping_result, recruiter_input=recruiter_input, ats_input=ats_input)
     state["render_payload"] = payload
     state["filled_manifest"] = {
         "manifest_id": manifest.get("manifest_id", str(uuid4())),
@@ -196,21 +332,31 @@ def route_after_suggest(state: ResumeFormatState) -> str:
 def build_resume_format_graph():
     graph = StateGraph(ResumeFormatState)
     graph.add_node("load_resume_input", load_resume_input)
+    graph.add_node("create_resume_summary", create_resume_summary)
     graph.add_node("resolve_or_suggest_template", resolve_or_suggest_template)
     graph.add_node("load_template_manifest", load_template_manifest)
-    graph.add_node("map_resume_to_manifest", map_resume_to_manifest)
+    graph.add_node("split_manifest_fields_by_source_classification", split_manifest_fields_by_source_classification)
+    graph.add_node("extract_resume_fact_fields", extract_resume_fact_fields)
+    graph.add_node("extract_generated_fields", extract_generated_fields)
+    graph.add_node("prepare_input_placeholder_sources", prepare_input_placeholder_sources)
+    graph.add_node("merge_extracted_sources", merge_extracted_sources)
     graph.add_node("build_render_payload", build_render_payload)
     graph.add_node("render_resume", render_resume)
 
     graph.set_entry_point("load_resume_input")
-    graph.add_edge("load_resume_input", "resolve_or_suggest_template")
+    graph.add_edge("load_resume_input", "create_resume_summary")
+    graph.add_edge("create_resume_summary", "resolve_or_suggest_template")
     graph.add_conditional_edges(
         "resolve_or_suggest_template",
         route_after_suggest,
         {"load_template_manifest": "load_template_manifest", END: END},
     )
-    graph.add_edge("load_template_manifest", "map_resume_to_manifest")
-    graph.add_edge("map_resume_to_manifest", "build_render_payload")
+    graph.add_edge("load_template_manifest", "split_manifest_fields_by_source_classification")
+    graph.add_edge("split_manifest_fields_by_source_classification", "extract_resume_fact_fields")
+    graph.add_edge("extract_resume_fact_fields", "extract_generated_fields")
+    graph.add_edge("extract_generated_fields", "prepare_input_placeholder_sources")
+    graph.add_edge("prepare_input_placeholder_sources", "merge_extracted_sources")
+    graph.add_edge("merge_extracted_sources", "build_render_payload")
     graph.add_edge("build_render_payload", "render_resume")
     graph.add_edge("render_resume", END)
     return graph.compile()
@@ -230,8 +376,18 @@ def run_resume_format(
             "resume_text": resume_text,
             "resume_object_key": resume_object_key,
             "raw_resume_text": None,
+            "resume_summary": None,
             "suggested_templates": [],
             "manifest": None,
+            "resume_fact_fields": [],
+            "generated_fields": [],
+            "input_only_fields": [],
+            "recruiter_input_fields": [],
+            "ats_input_fields": [],
+            "resume_fact_result": {},
+            "generated_result": {},
+            "recruiter_input_result": {},
+            "ats_input_result": {},
             "mapping_result": {},
             "render_payload": {},
             "extracted": {},
@@ -249,6 +405,7 @@ def run_resume_format(
             "template_id": result.get("template_id"),
             "resume_text": result.get("raw_resume_text"),
             "resume_object_key": result.get("resume_object_key"),
+            "resume_summary": result.get("resume_summary"),
             "suggested_templates": result.get("suggested_templates", []),
             "extracted": result.get("extracted", {}),
             "filled_manifest": result.get("filled_manifest"),

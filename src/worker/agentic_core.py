@@ -51,3 +51,29 @@ class AgenticCore:
             resume_text=resume_text,
             use_strong_model=use_strong_model,
         )
+
+    def generate_resume_fields(
+        self,
+        *,
+        fields: list[dict],
+        resume_text: str,
+        resume_fact_values: dict,
+        use_strong_model: bool = True,
+    ) -> dict:
+        return self.llm.generate_resume_fields(
+            fields=fields,
+            resume_text=resume_text,
+            resume_fact_values=resume_fact_values,
+            use_strong_model=use_strong_model,
+        )
+
+    def summarize_resume(
+        self,
+        *,
+        resume_text: str,
+        use_strong_model: bool = True,
+    ) -> str:
+        return self.llm.summarize_resume(
+            resume_text=resume_text,
+            use_strong_model=use_strong_model,
+        )

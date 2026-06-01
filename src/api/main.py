@@ -6,7 +6,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Form
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.shared.models import (
@@ -31,6 +30,24 @@ app = FastAPI(title="Hays Resume Formatter API", version="0.1.0")
 
 class SelectTemplateRequest(BaseModel):
     template_id: str
+
+
+class AgentToolSpec(BaseModel):
+    name: str
+    description: str
+    method: str
+    path: str
+
+
+class AgentManifestResponse(BaseModel):
+    name: str
+    version: str
+    description: str
+    base_path: str
+    openapi_url: str
+    docs_url: str
+    protocols: list[str]
+    tools: list[AgentToolSpec]
 
 
 @app.get("/health")
@@ -233,5 +250,28 @@ def get_template_details(template_id: str) -> TemplateDetailResponse:
     )
 
 
-app.mount("/", StaticFiles(directory="src/frontend", html=True), name="frontend")
+@app.get("/.well-known/agent.json", response_model=AgentManifestResponse)
+def get_agent_manifest() -> AgentManifestResponse:
+    return AgentManifestResponse(
+        name="Hays Resume Formatter Agent",
+        version="1.0.0-poc",
+        description="Resume formatting and template analysis API with browser UI, OpenAPI, and agent discovery metadata.",
+        base_path="/api",
+        openapi_url="/api/openapi.json",
+        docs_url="/api/docs",
+        protocols=["openapi", "mcp", "a2a"],
+        tools=[
+            AgentToolSpec(name="health", description="Check service availability.", method="GET", path="/health"),
+            AgentToolSpec(name="list_templates", description="List uploaded templates.", method="GET", path="/templates"),
+            AgentToolSpec(name="upload_template", description="Upload and analyze a DOCX template.", method="POST", path="/admin/templates"),
+            AgentToolSpec(name="format_resume", description="Submit a resume for formatting.", method="POST", path="/format"),
+            AgentToolSpec(name="get_job", description="Fetch a job by id.", method="GET", path="/jobs/{job_id}"),
+            AgentToolSpec(name="get_template_manifest", description="Fetch a template manifest.", method="GET", path="/templates/{template_id}/manifest"),
+        ],
+    )
+
+
+@app.get("/mcp/manifest", response_model=AgentManifestResponse)
+def get_mcp_manifest() -> AgentManifestResponse:
+    return get_agent_manifest()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -253,6 +254,116 @@ class LLMClient:
             },
             "missing_fields_requiring_recruiter_or_ats_input": [],
         }
+
+    def generate_resume_fields(
+        self,
+        *,
+        fields: list[dict[str, Any]],
+        resume_text: str,
+        resume_fact_values: dict[str, Any],
+        use_strong_model: bool = True,
+    ) -> dict[str, Any]:
+        model = self.strong_model if use_strong_model else self.fast_model
+
+        from src.worker.core.llm_call_manager import llm_call_manager
+
+        text = llm_call_manager.execute_call(
+            llm_client=self,
+            namespace="resume_generated",
+            context={
+                "fields_json": json.dumps(fields, ensure_ascii=True),
+                "resume_text": resume_text,
+                "resume_fact_values_json": json.dumps(resume_fact_values, ensure_ascii=True),
+            },
+            model=model,
+            max_tokens=settings.bedrock_max_output_tokens_data_mapping,
+            temperature=settings.bedrock_temperature_data_mapping,
+        )
+
+        cleaned_text = text.strip()
+        markdown_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", cleaned_text)
+        if markdown_match:
+            cleaned_text = markdown_match.group(1).strip()
+
+        try:
+            repaired = cleaned_text
+            repaired = re.sub(r'\]\s*"\s*\}', r']}', repaired)
+            repaired = re.sub(r'\]\s*"\s*\]', r']]', repaired)
+            repaired = re.sub(r'\}\s*\{', r'},{', repaired)
+            payload = json.loads(repaired)
+        except Exception as json_err:
+            try:
+                payload = json.loads(cleaned_text)
+            except Exception:
+                print(f"Failed to parse generated-field LLM response as JSON: {json_err}")
+                print("Raw generated-field LLM response:")
+                print("=" * 80)
+                print(text)
+                print("=" * 80)
+                raise json_err
+
+        if isinstance(payload.get("field_mappings"), dict):
+            return payload
+
+        extracted = payload.get("extracted", {})
+        if not isinstance(extracted, dict):
+            raise ValueError("Invalid Bedrock payload: expected 'field_mappings' or 'extracted'")
+
+        return {
+            "field_mappings": {
+                k: {
+                    "value": v,
+                    "confidence": 0.6 if v not in (None, [], "") else 0.0,
+                    "status": "mapped" if v not in (None, [], "") else "missing",
+                    "source": {"section": None, "evidence_text": None, "page": None},
+                }
+                for k, v in extracted.items()
+            },
+            "missing_fields_requiring_recruiter_or_ats_input": [],
+        }
+
+    def summarize_resume(
+        self,
+        *,
+        resume_text: str,
+        use_strong_model: bool = True,
+    ) -> str:
+        model = self.strong_model if use_strong_model else self.fast_model
+
+        from src.worker.core.llm_call_manager import llm_call_manager
+
+        # Keep input bounded while preserving enough context for a strong summary.
+        bounded_text = resume_text[:24000]
+        text = llm_call_manager.execute_call(
+            llm_client=self,
+            namespace="resume_summary",
+            context={"resume_text": bounded_text},
+            model=model,
+            max_tokens=512,
+            temperature=0.1,
+        )
+
+        cleaned_text = text.strip()
+        markdown_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", cleaned_text)
+        if markdown_match:
+            cleaned_text = markdown_match.group(1).strip()
+
+        summary = ""
+        try:
+            payload = json.loads(cleaned_text)
+            summary = (
+                payload.get("summary")
+                or payload.get("resume_summary")
+                or payload.get("profile_summary")
+                or ""
+            )
+        except Exception:
+            summary = cleaned_text
+
+        summary = re.sub(r"\s+", " ", str(summary)).strip()
+        if len(summary) > 500:
+            summary = summary[:497].rstrip() + "..."
+        return summary
 
     def _call_bedrock(self, *, system_prompt: str, user_prompt: str, model: str, max_tokens: int, temperature: float = 0.1) -> str:
         text, _ = self._call_bedrock_with_usage(

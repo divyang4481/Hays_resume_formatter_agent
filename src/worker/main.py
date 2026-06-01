@@ -58,7 +58,8 @@ def process_resume_format(message: dict) -> None:
             repo.update_job(
                 payload.job_id,
                 status=JobStatus.WAITING_FOR_TEMPLATE_SELECTION,
-                suggested_templates=result.data.get("suggested_templates", [])
+                suggested_templates=result.data.get("suggested_templates", []),
+                resume_summary=result.data.get("resume_summary"),
             )
             print(f"Resume formatting job {payload.job_id} is waiting for template selection.")
             return
@@ -81,6 +82,7 @@ def process_resume_format(message: dict) -> None:
             status=JobStatus.COMPLETED,
             output_object_key=output_key,
             template_id=result.data.get("template_id"),
+            resume_summary=result.data.get("resume_summary"),
             extracted_data=extracted_data_to_store,
         )
         print(f"Successfully completed resume formatting job: {payload.job_id}")

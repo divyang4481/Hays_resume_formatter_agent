@@ -1,45 +1,73 @@
 // Global State
 let selectedTemplateId = null;
-let activeTab = 'agent';
+let activeRoute = 'agent';
 let currentJobId = null;
 let pollInterval = null;
 let allTemplates = [];
 let adminJobs = [];
 let adminJobPollInterval = null;
 let activeAdminView = 'templates';
+let agentManifest = null;
 
-// API Host - default to empty (same host)
-const API_HOST = '';
+// API Host - proxied through the frontend container to avoid CORS in ECS/ALB.
+const API_HOST = '/api';
 
 document.addEventListener('DOMContentLoaded', () => {
-    initTabNavigation();
+    initRouteNavigation();
     initFileUploads();
-    loadTemplates();
-    loadRecentJobs();
+    renderCurrentRoute();
 });
 
-// 1. Tab Navigation
-function initTabNavigation() {
+// 1. Route Navigation
+function initRouteNavigation() {
     window.switchTab = (tabName) => {
-        activeTab = tabName;
-        document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
-
-        document.getElementById(`nav-${tabName}`).classList.add('active');
-        document.getElementById(`tab-${tabName}`).classList.add('active');
-
-        if (tabName === 'agent') {
-            stopAdminJobPolling();
-            loadTemplates();
-            loadRecentJobs();
-        } else if (tabName === 'admin') {
-            loadAdminTemplates();
-            loadAdminJobs();
-            startAdminJobPolling();
-        } else {
-            stopAdminJobPolling();
-        }
+        navigateTo(tabName === 'admin' ? '/admin' : '/');
     };
+
+    window.addEventListener('popstate', () => {
+        renderCurrentRoute();
+    });
+}
+
+function getRouteFromPath(pathname = window.location.pathname) {
+    return pathname === '/admin' || pathname.startsWith('/admin/') ? 'admin' : 'agent';
+}
+
+function navigateTo(pathname) {
+    if (window.location.pathname !== pathname) {
+        window.history.pushState({ pathname }, '', pathname);
+    }
+    renderCurrentRoute(false);
+}
+
+function renderCurrentRoute(triggerLoad = true) {
+    const route = getRouteFromPath();
+    activeRoute = route;
+
+    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+
+    const navButton = document.getElementById(route === 'admin' ? 'nav-admin' : 'nav-agent');
+    const tabPane = document.getElementById(route === 'admin' ? 'tab-admin' : 'tab-agent');
+
+    if (navButton) navButton.classList.add('active');
+    if (tabPane) tabPane.classList.add('active');
+
+    if (!triggerLoad) {
+        return;
+    }
+
+    if (route === 'admin') {
+        stopAdminJobPolling();
+        loadAdminTemplates();
+        loadAdminJobs();
+        loadAgentManifest();
+        startAdminJobPolling();
+    } else {
+        stopAdminJobPolling();
+        loadTemplates();
+        loadRecentJobs();
+    }
 }
 
 function switchAdminView(viewName) {
@@ -52,15 +80,17 @@ function switchAdminView(viewName) {
 
     if (viewName === 'templates') {
         loadAdminTemplates();
-    } else {
+    } else if (viewName === 'resumes') {
         loadAdminJobs();
+    } else {
+        loadAgentManifest();
     }
 }
 
 function startAdminJobPolling() {
     stopAdminJobPolling();
     adminJobPollInterval = setInterval(() => {
-        if (activeTab === 'admin') {
+        if (activeRoute === 'admin') {
             loadAdminJobs(false);
             if (activeAdminView === 'templates') {
                 loadAdminTemplates(false);
@@ -728,6 +758,60 @@ function renderAdminResumeJobs(tbody) {
             </tr>
         `;
     }).join('');
+}
+
+async function loadAgentManifest() {
+    const toolList = document.getElementById('agent-tool-list');
+    const raw = document.getElementById('agent-manifest-raw');
+    const openapiUrl = document.getElementById('agent-openapi-url');
+    const manifestUrl = document.getElementById('agent-manifest-url');
+    const protocols = document.getElementById('agent-protocols');
+
+    if (toolList) {
+        toolList.innerHTML = `<div class="loading-state"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading agent manifest...</p></div>`;
+    }
+
+    try {
+        const res = await fetch(`${API_HOST}/.well-known/agent.json`);
+        if (!res.ok) throw new Error('Failed to load agent manifest');
+        agentManifest = await res.json();
+
+        if (openapiUrl) openapiUrl.textContent = agentManifest.openapi_url || '-';
+        if (manifestUrl) manifestUrl.textContent = `${API_HOST}/.well-known/agent.json`;
+        if (protocols) protocols.textContent = Array.isArray(agentManifest.protocols) ? agentManifest.protocols.join(', ') : '-';
+        if (raw) raw.textContent = JSON.stringify(agentManifest, null, 2);
+
+        const tools = agentManifest.tools || [];
+        if (tools.length === 0) {
+            toolList.innerHTML = `<div class="loading-state"><i class="fa-solid fa-circle-info"></i><p>No tools registered.</p></div>`;
+            return;
+        }
+
+        toolList.innerHTML = tools.map(tool => `
+            <div class="agent-tool-card">
+                <div class="agent-tool-main">
+                    <strong>${escapeHtml(tool.name)}</strong>
+                    <span class="subtitle">${escapeHtml(tool.description)}</span>
+                    <code class="agent-tool-path">${escapeHtml(tool.method)} ${escapeHtml(tool.path)}</code>
+                </div>
+                <span class="badge">${escapeHtml(tool.method)}</span>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error(err);
+        if (toolList) {
+            toolList.innerHTML = `<div class="loading-state text-danger"><i class="fa-solid fa-triangle-exclamation"></i><p>Failed to load agent discovery metadata.</p></div>`;
+        }
+    }
+}
+
+async function copyAgentManifestUrl() {
+    const value = `${window.location.origin}${API_HOST}/.well-known/agent.json`;
+    try {
+        await navigator.clipboard.writeText(value);
+    } catch (err) {
+        console.error(err);
+    }
 }
 
 function trackExistingJobFromAdmin(jobId) {

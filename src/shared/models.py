@@ -70,6 +70,7 @@ class JobStatusResponse(BaseModel):
     template_id: str | None = None
     resume_text: str | None = None
     resume_object_key: str | None = None
+    resume_summary: str | None = None
     suggested_templates: list[dict] | None = None
     extracted_data: dict[str, Any] | None = None
 
