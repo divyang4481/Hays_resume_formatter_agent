@@ -28,3 +28,4 @@ venv/
 artifacts/
 src/shared/__pycache__/queue.cpython-311.pyc
 src/shared/__pycache__/storage.cpython-311.pyc
+SampleData/manifest/UK_Treasury__817e721f-d9c8-4d5c-a4fd-2c7e6d46a833.json
