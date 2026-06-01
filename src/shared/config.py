@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     bedrock_temperature_data_mapping: float = 0.0
     bedrock_max_output_tokens_default: int = 16384
     bedrock_temperature_default: float = 0.1
+    bedrock_connect_timeout_seconds: int = 10
+    bedrock_read_timeout_seconds: int = 120
+    bedrock_max_retries: int = 2
     llm_log_prompts: bool = True
     llm_log_prompt_chars: int = 12000
 

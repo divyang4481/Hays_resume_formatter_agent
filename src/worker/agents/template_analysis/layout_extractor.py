@@ -14,7 +14,7 @@ def _is_heading(text: str, style_name: str) -> bool:
 
 
 def _extract_placeholder(text: str) -> str | None:
-    m = re.search(r"\[[^\]]+\]", text or "")
+    m = re.search(r"\[[^\]]+\]|<<[^>]+>>", text or "")
     return m.group(0).strip() if m else None
 
 

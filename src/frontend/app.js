@@ -37,12 +37,15 @@ function navigateTo(pathname) {
     if (window.location.pathname !== pathname) {
         window.history.pushState({ pathname }, '', pathname);
     }
-    renderCurrentRoute(false);
+    renderCurrentRoute();
 }
 
 function renderCurrentRoute(triggerLoad = true) {
     const route = getRouteFromPath();
     activeRoute = route;
+
+    document.body.classList.toggle('route-agent', route === 'agent');
+    document.body.classList.toggle('route-admin', route === 'admin');
 
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
@@ -134,6 +137,40 @@ function getStatusIcon(status) {
     if (status === 'processing') return 'fa-spinner fa-spin';
     if (status === 'waiting_for_template_selection') return 'fa-hand-pointer';
     return 'fa-clock';
+}
+
+function getSourceClassificationLabel(value) {
+    const normalized = value || 'resume_fact';
+    const labels = {
+        resume_fact: 'resume_fact',
+        generated: 'generated',
+        recruiter_input: 'recruiter_input',
+        ats_input: 'ats_input',
+        input_only: 'input_only'
+    };
+    return labels[normalized] || normalized;
+}
+
+function renderFieldPreviewList(fields, limit = 10) {
+    if (!fields.length) {
+        return `<div class="admin-field-empty">No manifest fields detected yet.</div>`;
+    }
+
+    const visibleFields = fields.slice(0, limit);
+    const remainder = fields.length - visibleFields.length;
+
+    const fieldChips = visibleFields.map(field => `
+        <span class="admin-field-chip">
+            <strong>${escapeHtml(field.name)}</strong>
+            <span class="admin-field-chip-meta">${escapeHtml(getSourceClassificationLabel(field.source_classification))}</span>
+        </span>
+    `).join('');
+
+    const overflow = remainder > 0
+        ? `<span class="admin-field-chip admin-field-chip-more">+${remainder} more</span>`
+        : '';
+
+    return `<div class="admin-field-chip-list">${fieldChips}${overflow}</div>`;
 }
 
 // 2. File Uploads (Drag & Drop + Input Listeners)
@@ -679,6 +716,7 @@ function displayExtractedFields(data, templateId) {
         groups[classification].fields.push({
             name: key,
             type: typeStr,
+            sourceClassification: getSourceClassificationLabel(fieldClassMap[key] || 'resume_fact'),
             value: valStr
         });
     });
@@ -693,6 +731,7 @@ function displayExtractedFields(data, templateId) {
             <tr>
                 <td style="width: 25%;"><strong>${escapeHtml(f.name)}</strong></td>
                 <td style="width: 15%;"><span class="badge">${escapeHtml(f.type)}</span></td>
+                <td style="width: 18%;"><span class="badge badge-source-hint">${escapeHtml(f.sourceClassification)}</span></td>
                 <td>${f.value}</td>
             </tr>
         `).join('');
@@ -711,6 +750,7 @@ function displayExtractedFields(data, templateId) {
                             <tr>
                                 <th>Field Name</th>
                                 <th>Type</th>
+                                <th>Data Source Hint</th>
                                 <th>Extracted Value</th>
                             </tr>
                         </thead>
@@ -845,12 +885,21 @@ function renderAdminTemplateList(list) {
         const statusClass = fields.length > 0 ? 'text-success' : 'text-warning';
         return `
             <div class="admin-template-item">
-                <div class="admin-item-info">
+                <div class="admin-item-main">
+                    <div class="admin-item-info">
                     <i class="fa-solid fa-file-word admin-file-icon"></i>
-                    <div>
-                        <span class="admin-item-title">${escapeHtml(tpl.template_name)}</span>
-                        <div class="admin-item-subtitle">ID: ${escapeHtml(tpl.template_id)} · Version: ${escapeHtml(tpl.version)} · <span class="${statusClass}">${statusLabel}</span></div>
-                        <div class="admin-item-subtitle">Object: ${escapeHtml(tpl.object_key || '-')}</div>
+                        <div>
+                            <span class="admin-item-title">${escapeHtml(tpl.template_name)}</span>
+                            <div class="admin-item-subtitle">ID: ${escapeHtml(tpl.template_id)} · Version: ${escapeHtml(tpl.version)} · <span class="${statusClass}">${statusLabel}</span></div>
+                            <div class="admin-item-subtitle">Object: ${escapeHtml(tpl.object_key || '-')}</div>
+                        </div>
+                    </div>
+                    <div class="admin-template-fields-block">
+                        <div class="admin-template-fields-header">
+                            <span>Manifest field list</span>
+                            <span class="subtitle">with data source hints</span>
+                        </div>
+                        ${renderFieldPreviewList(fields)}
                     </div>
                 </div>
                 <div class="admin-item-actions">
@@ -1073,7 +1122,7 @@ async function inspectManifest(templateId) {
 
         const tbody = document.getElementById('modal-fields-body');
         if (fields.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No manifest fields detected for this template. Check analysis worker log.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No manifest fields detected for this template. Check analysis worker log.</td></tr>`;
         } else {
             tbody.innerHTML = fields.map(f => `
                 <tr>
@@ -1081,6 +1130,7 @@ async function inspectManifest(templateId) {
                     <td><span class="badge">${escapeHtml(f.field_type)}</span></td>
                     <td>${f.required ? '<span class="text-warning">Required</span>' : '<span class="text-muted">Optional</span>'}</td>
                     <td><code>${escapeHtml(f.template_token)}</code></td>
+                    <td><span class="badge badge-source-hint">${escapeHtml(getSourceClassificationLabel(f.source_classification || '-'))}</span></td>
                     <td><span class="subtitle">${escapeHtml(f.source_hint || '-')}</span></td>
                 </tr>
             `).join('');

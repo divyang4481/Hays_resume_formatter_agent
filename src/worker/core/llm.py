@@ -6,6 +6,8 @@ from typing import Any
 from uuid import uuid4
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from src.shared.config import settings
 from src.worker.core.prompt_manager import PromptManager
@@ -16,12 +18,19 @@ class LLMClient:
         self.provider = "bedrock"
         self.fast_model = settings.llm_model_fast
         self.strong_model = settings.llm_model_strong
-        
+
+        botocore_cfg = Config(
+            connect_timeout=settings.bedrock_connect_timeout_seconds,
+            read_timeout=settings.bedrock_read_timeout_seconds,
+            retries={"max_attempts": settings.bedrock_max_retries, "mode": "standard"},
+        )
+
         session = boto3.Session(profile_name=settings.aws_profile) if settings.aws_profile else boto3.Session()
-        self._bedrock_runtime = session.client("bedrock-runtime", region_name=settings.aws_region)
-        self._bedrock_agent_runtime = session.client("bedrock-agent-runtime", region_name=settings.aws_region)
+        self._bedrock_runtime = session.client("bedrock-runtime", region_name=settings.aws_region, config=botocore_cfg)
+        self._bedrock_agent_runtime = session.client("bedrock-agent-runtime", region_name=settings.aws_region, config=botocore_cfg)
         self.bedrock_agent_id = settings.bedrock_agent_id
         self.bedrock_agent_alias_id = settings.bedrock_agent_alias_id
+        self._bedrock_agent_available = bool(self.bedrock_agent_id and self.bedrock_agent_alias_id)
         self.prompt_manager = PromptManager()
 
     def extract_structured_fields(self, prompt: str, use_strong_model: bool = False) -> dict:
@@ -480,13 +489,58 @@ class LLMClient:
         temperature: float,
     ) -> tuple[str, dict[str, int]]:
         usage = {"input_tokens": 0, "output_tokens": 0}
-        if self.bedrock_agent_id and self.bedrock_agent_alias_id:
+        if self._bedrock_agent_available:
             try:
                 text = self._call_bedrock_agent(system_prompt=system_prompt, user_prompt=user_prompt)
                 return text, usage
+            except ClientError as e:
+                error_code = (e.response or {}).get("Error", {}).get("Code", "")
+                if error_code == "accessDeniedException":
+                    # Disable agent path after first permission failure to avoid repeated latency.
+                    self._bedrock_agent_available = False
+                    print(
+                        "Bedrock Agent access denied. Disabling agent invocation for this worker process "
+                        "and falling back to foundation model direct calls."
+                    )
+                else:
+                    print(f"Bedrock Agent invocation failed: {e}. Falling back to foundation model direct call...")
             except Exception as e:
                 print(f"Bedrock Agent invocation failed: {e}. Falling back to foundation model direct call...")
 
+        try:
+            return self._converse_with_usage(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as e:
+            message = str(e).lower()
+            fallback_model = settings.bedrock_fallback_model_id
+            if "read timeout" in message and fallback_model and fallback_model != model:
+                print(
+                    f"Bedrock converse timed out for model {model}. Retrying once with fallback model {fallback_model}."
+                )
+                return self._converse_with_usage(
+                    model=fallback_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            print(f"Bedrock converse call failed for model {model}: {e}")
+            raise e
+
+    def _converse_with_usage(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> tuple[str, dict[str, int]]:
         messages = [
             {
                 "role": "user",
@@ -507,18 +561,14 @@ class LLMClient:
         if system:
             converse_params["system"] = system
 
-        try:
-            response = self._bedrock_runtime.converse(**converse_params)
-            text = response['output']['message']['content'][0]['text']
-            usage_info = response.get("usage", {})
-            usage = {
-                "input_tokens": usage_info.get("inputTokens", 0),
-                "output_tokens": usage_info.get("outputTokens", 0)
-            }
-            return text, usage
-        except Exception as e:
-            print(f"Bedrock converse call failed for model {model}: {e}")
-            raise e
+        response = self._bedrock_runtime.converse(**converse_params)
+        text = response['output']['message']['content'][0]['text']
+        usage_info = response.get("usage", {})
+        usage = {
+            "input_tokens": usage_info.get("inputTokens", 0),
+            "output_tokens": usage_info.get("outputTokens", 0)
+        }
+        return text, usage
 
     def _call_bedrock_agent(self, *, system_prompt: str, user_prompt: str) -> str:
         prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"

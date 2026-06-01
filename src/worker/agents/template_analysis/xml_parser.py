@@ -8,7 +8,8 @@ from typing import List, Dict, Any
 
 
 def _clean_field_name(raw: str) -> str:
-    text = raw.strip().strip('"').strip("'").strip('[').strip(']')
+    text = raw.strip().strip('"').strip("'")
+    text = re.sub(r"^(\[|<<)+|(\]|>>)+$", "", text).strip()
     text = re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
     return text or "unknown_field"
 
@@ -29,7 +30,23 @@ def _extract_macro_placeholder(instr_text: str) -> str | None:
 
 
 def _strip_bracketed(text: str) -> str:
-    return re.sub(r"\[[^\]]+\]", " ", text or "").strip()
+    text = re.sub(r"\[[^\]]+\]", " ", text or "")
+    return re.sub(r"<<[^>]+>>", " ", text).strip()
+
+
+def _extract_text_placeholders(text: str) -> list[str]:
+    if not text:
+        return []
+    matches = re.findall(r"\[[^\]]+\]|<<[^>]+>>", text)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for match in matches:
+        cleaned = match.strip()
+        key = cleaned.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(cleaned)
+    return unique
 
 
 def _resolve_generic_placeholder_name(raw_placeholder: str, source_hint: str, heading: str) -> str:
@@ -187,6 +204,37 @@ def extract_fields_from_docx(docx_path: Path) -> List[Dict]:
                           "source_hint": source_hint, "token": instr_text,
                           "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
                           "source_block_ids": [block["block_id"]], "template_evidence": block})
+
+        existing_tokens = {
+            str(field.get("token") or "")
+            for field in fields
+            if (field.get("template_evidence") or {}).get("row_text") == table_ctx.get("row_text")
+            and (field.get("template_evidence") or {}).get("cell_text") == table_ctx.get("cell_text")
+        }
+        for raw_placeholder in _extract_text_placeholders(paragraph_text):
+            if raw_placeholder in existing_tokens:
+                continue
+
+            is_bracket_placeholder = raw_placeholder.startswith("[") and raw_placeholder.endswith("]")
+            inner_placeholder = raw_placeholder[1:-1] if is_bracket_placeholder else raw_placeholder[2:-2]
+            base_name = _clean_field_name(inner_placeholder)
+            if is_bracket_placeholder and base_name in {"type_text", "type_text_", "bullet_point_list"}:
+                base_name = _resolve_generic_placeholder_name(inner_placeholder, source_hint, current_heading)
+
+            token_name = f"{base_name}_item" if is_bullet else base_name
+            counts_by_name[token_name] = counts_by_name.get(token_name, 0) + 1
+            final_name = token_name if counts_by_name[token_name] == 1 else f"{token_name}_{counts_by_name[token_name]}"
+            block = next_block(raw_placeholder, source_hint, style_val, is_bullet, table_ctx)
+            fields.append({
+                "name": final_name,
+                "type": "array" if is_bullet else "scalar",
+                "required": True,
+                "source_hint": source_hint,
+                "token": raw_placeholder,
+                "context": {"heading": current_heading, "style": style_val, "is_bullet": is_bullet},
+                "source_block_ids": [block["block_id"]],
+                "template_evidence": block,
+            })
 
     return fields
 

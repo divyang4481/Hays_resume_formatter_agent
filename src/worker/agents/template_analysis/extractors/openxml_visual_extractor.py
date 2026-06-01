@@ -21,7 +21,7 @@ def _extract_macro_placeholder(instr_text: str) -> str | None:
     return None
 
 def _extract_placeholder(text: str) -> str | None:
-    m = re.search(r"\[[^\]]+\]", text or "")
+    m = re.search(r"\[[^\]]+\]|<<[^>]+>>", text or "")
     return m.group(0).strip() if m else None
 
 def extract_openxml_visual_evidence(docx_bytes: bytes) -> VisualModel:

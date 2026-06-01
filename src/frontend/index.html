@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="index.css">
 </head>
-<body class="dark-theme">
+<body class="light-theme">
     <!-- Premium Backdrop Glows -->
     <div class="glow-bg glow-navy"></div>
     <div class="glow-bg glow-cyan"></div>
@@ -22,10 +22,10 @@
         <header class="main-header">
             <div class="logo-area">
                 <div class="logo-icon">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <i class="fa-solid fa-certificate"></i>
                 </div>
                 <div class="logo-text">
-                    <h1>HAYS</h1>
+                    <h1>HAYS POC</h1>
                     <span>Resume Agent Platform</span>
                 </div>
             </div>
@@ -44,7 +44,8 @@
 
             <!-- SECTION 1: RESUME AGENT INTERFACE -->
             <section id="tab-agent" class="tab-pane active">
-                <div class="hero-section">
+                <div class="hero-section route-hero route-hero-agent">
+                    <div class="route-kicker">Resume Workspace</div>
                     <h2>Format Resumes Flawlessly</h2>
                     <p>Upload a candidate's CV and format it using high-quality corporate templates instantly.</p>
                 </div>
@@ -60,7 +61,7 @@
                         <div class="upload-options">
                             <!-- File Upload Area -->
                             <div class="drag-drop-zone" id="cv-drop-zone">
-                                <input type="file" id="cv-file-input" accept=".pdf,.docx,.txt" class="hidden-input">
+                                <input type="file" id="cv-file-input" accept=".pdf,.docx,.txt" class="hidden-input" title="Upload candidate CV file">
                                 <i class="fa-solid fa-cloud-arrow-up cloud-icon"></i>
                                 <p class="zone-primary-text">Drag & drop candidate CV here</p>
                                 <p class="zone-secondary-text">Supports PDF, DOCX or TXT files</p>
@@ -225,6 +226,7 @@
                                         <tr>
                                             <th>Field Name</th>
                                             <th>Type</th>
+                                            <th>Data Source Hint</th>
                                             <th>Extracted Value</th>
                                         </tr>
                                     </thead>
@@ -270,7 +272,8 @@
 
             <!-- SECTION 2: ADMIN AREA (TEMPLATES & MANIFEST MANAGEMENT) -->
             <section id="tab-admin" class="tab-pane">
-                <div class="hero-section">
+                <div class="hero-section route-hero route-hero-admin">
+                    <div class="route-kicker">Admin Workspace</div>
                     <h2>Admin Management Console</h2>
                     <p>Upload new templates to parse manifests, analyze XML structures and manage field dictionaries.</p>
                 </div>
@@ -333,7 +336,7 @@
                                     <p class="card-subtitle">Upload corporate templates (.docx) to automatically analyze merge fields, XML styles, and generate the manifest.</p>
 
                                     <div class="drag-drop-zone admin-zone" id="template-drop-zone">
-                                        <input type="file" id="template-file-input" accept=".docx" class="hidden-input">
+                                        <input type="file" id="template-file-input" accept=".docx" class="hidden-input" title="Upload DOCX template file">
                                         <i class="fa-solid fa-file-circle-plus cloud-icon"></i>
                                         <p class="zone-primary-text">Drag & drop DOCX template here</p>
                                         <p class="zone-secondary-text">Only Microsoft Word (.docx) templates are supported</p>
@@ -448,7 +451,7 @@
 
         <!-- Premium Footer -->
         <footer class="app-footer">
-            <p>&copy; 2026 Hays Agentic Document Platform. Created with premium dynamic UX.</p>
+            <p>&copy; 2026 Hays Agentic Document Platform. power by Cognizant.</p>
             <div class="footer-links">
                 <span>System status: <strong class="text-success"><i class="fa-solid fa-circle-check"></i> Connected</strong></span>
             </div>
@@ -463,7 +466,7 @@
                     <h3 id="modal-template-name">Template Manifest Overview</h3>
                     <span class="subtitle" id="modal-template-meta">Template ID: 12345 | Version: 1</span>
                 </div>
-                <button class="btn-close" onclick="closeManifestModal()">
+                <button class="btn-close" onclick="closeManifestModal()" title="Close manifest modal" aria-label="Close manifest modal">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
@@ -514,6 +517,7 @@
                                     <th>Type</th>
                                     <th>Required</th>
                                     <th>XML Token Match</th>
+                                    <th>Data Source Hint</th>
                                     <th>Source Context Hint</th>
                                 </tr>
                             </thead>
