@@ -7,7 +7,8 @@ from src.shared.models import JobStatus, ResumeFormatMessage, TemplateAnalysisMe
 from src.shared.queue import queue_bus
 from src.shared.repository import repo
 from src.shared.storage import object_store
-from src.worker.agents.template_analysis import run_template_analysis
+from src.worker.agents.template_analysis import TemplateAnalysisAgent
+from src.worker.agentic_core import AgenticCore
 from src.worker.agents.resume_formatter import run_resume_format
 
 
@@ -15,21 +16,24 @@ def process_template_analysis(message: dict) -> None:
     try:
         print(f"Processing template analysis job: {message.get('job_id')}")
         payload = TemplateAnalysisMessage.model_validate(message)
-        repo.update_job(payload.job_id, status=JobStatus.PROCESSING)
 
-        result = run_template_analysis(
+        # In real worker, we pass S3 object_store, Bedrock AgenticCore, and RDS repo
+        agent = TemplateAnalysisAgent(
+            object_store=object_store,
+            llm_client=AgenticCore(),
+            repo=repo,
+        )
+
+        result = agent.run_analysis(
             template_id=payload.template_id,
             template_name=payload.template_name,
             template_object_key=payload.template_object_key,
+            job_id=payload.job_id,
         )
 
         if result.status == JobStatus.COMPLETED:
-            repo.save_manifest(payload.template_id, result.data)
-            repo.update_job(payload.job_id, status=JobStatus.COMPLETED)
             print(f"Successfully completed template analysis job: {payload.job_id}")
             return
-
-        repo.update_job(payload.job_id, status=JobStatus.FAILED, error=result.error)
         print(f"Template analysis job {payload.job_id} failed: {result.error}")
     except Exception as e:
         print(f"Error processing template analysis: {e}")
@@ -84,6 +88,7 @@ def process_resume_format(message: dict) -> None:
             template_id=result.data.get("template_id"),
             resume_summary=result.data.get("resume_summary"),
             extracted_data=extracted_data_to_store,
+            field_data_mapping=result.data.get("extracted"),
         )
         print(f"Successfully completed resume formatting job: {payload.job_id}")
         if filled_manifest:

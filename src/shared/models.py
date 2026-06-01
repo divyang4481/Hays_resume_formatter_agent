@@ -73,6 +73,7 @@ class JobStatusResponse(BaseModel):
     resume_summary: str | None = None
     suggested_templates: list[dict] | None = None
     extracted_data: dict[str, Any] | None = None
+    field_data_mapping: dict[str, Any] | None = None
 
 
 class JobListResponse(BaseModel):

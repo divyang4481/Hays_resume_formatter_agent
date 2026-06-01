@@ -3,4 +3,7 @@ Template Name: {{ template_name }}
 Here are the raw field candidates extracted from the resume template:
 {{ candidates_json }}
 
-Please plan, standardize, and group these candidates into the final fields array. Map raw presenter/consultant and candidate placeholders to standard canonical resume schema keys. Cleanly group any repeating list or experience placeholders under their logical sections as structured array_object fields. Ensure you include instructional regions meant for copying content (like the candidate's own CV).
+Detected repeat groups and layout repeats:
+{{ repeat_groups_json }}
+
+Please plan, standardize, and group these candidates into the final fields array. Map raw presenter/consultant and candidate placeholders to standard canonical resume schema keys. Cleanly group any repeating list or experience placeholders under their logical sections as structured array_object fields. Preserve render_contract semantics so the final planned field still knows whether it is injected by placeholder replacement, repeat block insertion, or mailmerge table region insertion. Ensure you include instructional regions meant for copying content (like the candidate's own CV).

@@ -12,6 +12,9 @@ Field handling rules:
 - Do not collapse array_object fields into a single string.
 - Do not skip repeatable sections such as work experience or education when evidence is present.
 - Preserve the structure implied by sub_fields in the manifest.
+- Use `search_hint`, `template_evidence.section_heading`, `template_evidence.region_type`, `render_contract.render_strategy`, `render_contract.block_tokens`, and `sub_fields` as the planning contract for how the field should be searched and shaped.
+- If a field is planned as `array_object`, search the matching resume section first and build one object per real entry using the planned sub-field names.
+- If `render_contract.render_strategy` indicates a repeatable block or table region, prefer section-based extraction over isolated keyword matching.
 
 For work experience style fields, extract each role with dates, organisation, and responsibilities where available.
 
@@ -29,26 +32,26 @@ Qualification field rules:
 Few-shot examples:
 
 Example 1 - scalar field
-Input field: {"name":"candidate_name","field_type":"scalar"}
+Input field: {"name":"person_name","field_type":"scalar"}
 Resume evidence: "Divyang Panchasara"
-Output: {"extracted":{"candidate_name":"Divyang Panchasara"}}
+Output: {"extracted":{"person_name":"Divyang Panchasara"}}
 
 Example 2 - array field
-Input field: {"name":"skills","field_type":"array"}
+Input field: {"name":"capability_list","field_type":"array"}
 Resume evidence: "Python, Azure, AWS, Microservices"
-Output: {"extracted":{"skills":["Python","Azure","AWS","Microservices"]}}
+Output: {"extracted":{"capability_list":["Python","Azure","AWS","Microservices"]}}
 
 Example 3 - array_object field
-Input field: {"name":"work_experience","field_type":"array_object","sub_fields":[{"name":"job_description_date"},{"name":"organisation"},{"name":"bullet_point_responsibilities"}]}
+Input field: {"name":"experience_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"organisation"},{"name":"responsibilities"}]}
 Resume evidence: "Senior Architect at Acme from 2020 to 2024; led cloud migration and microservices redesign"
-Output: {"extracted":{"work_experience":[{"job_description_date":"2020-2024","organisation":"Acme","bullet_point_responsibilities":["Led cloud migration","Redesigned microservices"]}]}}
+Output: {"extracted":{"experience_entries":[{"period":"2020-2024","organisation":"Acme","responsibilities":["Led cloud migration","Redesigned microservices"]}]}}
 
 Example 4 - no safe evidence
-Input field: {"name":"notice_period","field_type":"scalar"}
+Input field: {"name":"availability","field_type":"scalar"}
 Resume evidence: none
-Output: {"extracted":{"notice_period":""}}
+Output: {"extracted":{"availability":""}}
 
 Example 5 - professional qualifications (array_object)
-Input field: {"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]}
+Input field: {"name":"credential_entries","field_type":"array_object","sub_fields":[{"name":"credential_name"}]}
 Resume evidence: "Certification: AWS Certified Solutions Architect; Microsoft Certified: Azure AI Engineer Associate"
-Output: {"extracted":{"professional_qualifications":[{"check_type":"AWS Certified Solutions Architect"},{"check_type":"Microsoft Certified: Azure AI Engineer Associate"}]}}
+Output: {"extracted":{"credential_entries":[{"credential_name":"AWS Certified Solutions Architect"},{"credential_name":"Microsoft Certified: Azure AI Engineer Associate"}]}}

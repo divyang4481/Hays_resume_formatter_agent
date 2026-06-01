@@ -128,9 +128,8 @@ def critique_manifest(manifest: dict) -> dict:
             issues.append({"severity": "warning", "code": "WRONG_HEADING_CARRYOVER", "field": name, "message": "Label-value table field seems incorrectly attached to previous list heading."})
 
     # The TABLE_REGION_SCALAR_LEAK rule.
-    # If a table region contains CheckType but output exposes only scalar check_type, raise error.
-    # Actually, if we group it properly, it will be array_object. So we just need to ensure no `table_start` tokens are left dangling,
-    # or if we have a table region evidence but the field is not array_object.
+    # If a table-backed repeated region is emitted as scalar, raise error.
+    # Repeated table evidence should map to array_object/list-like fields.
     for field in fields:
         ev = field.get("template_evidence") or {}
         if ev.get("region_type") == "mailmerge_table_region" and field.get("field_type") == "scalar":

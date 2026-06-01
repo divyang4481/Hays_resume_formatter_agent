@@ -26,3 +26,7 @@ SampleData/output/*.xml
 SampleData/data/*.json
 SampleData/output/*.docx
 SampleData/output/live_batch_20260601/*.docx
+
+# Dev notes and local shortcut commands
+/dev.md
+

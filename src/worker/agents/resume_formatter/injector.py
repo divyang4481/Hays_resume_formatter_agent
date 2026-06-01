@@ -243,14 +243,21 @@ def _replace_token_in_paragraph(para: Any, token: str, value: str) -> bool:
             break
             
     if has_macrobutton:
-        # Clear all child runs (w:r elements) in this paragraph
-        for r in p_elem.findall(".//" + qn("w:r")):
-            r.getparent().remove(r)
-            
+        # Remove ALL direct children of w:p except w:pPr (paragraph properties).
+        # Using findall(".//w:r") + getparent().remove() is unreliable because
+        # lxml's findall returns a snapshot but remove() mutates the tree mid-iteration.
+        # Clearing direct children preserves formatting (pPr) while wiping the entire
+        # Macrobutton complex-field structure (fldChar begin/instrText/separate/end runs).
+        pPr = p_elem.find(qn("w:pPr"))
+        for child in list(p_elem):          # list() snapshots children before mutation
+            p_elem.remove(child)
+        if pPr is not None:
+            p_elem.insert(0, pPr)           # restore paragraph properties
+
         # Add a new clean text run containing the replacement value
         para.add_run(value)
         return True
-        
+
     return False
 
 
@@ -336,8 +343,8 @@ def _inject_array_paragraphs(
         injection_type = inj.get("injection_type", "text_placeholder")
         render_strategy = (field.get("render_contract") or {}).get("render_strategy", "")
 
-        # Repeat-block fields with explicit block mappings are handled in targeted injection.
-        if field.get("source_block_ids") and render_strategy == "repeat_block":
+        # Fields with explicit block mappings are handled in targeted injection.
+        if field.get("source_block_ids"):
             continue
 
         # Table-region arrays must be rendered only by table row expansion.
@@ -487,7 +494,12 @@ def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, fi
 
             texts = [(t.text or "") for t in child.findall(".//" + qn("w:t"))]
             paragraph_text = "".join(texts).strip()
-            has_tokens = bool(child.findall(".//" + qn("w:fldSimple")) or child.findall(".//" + qn("w:instrText")))
+            # Include w:fldChar (complex/Macrobutton fields) in addition to simple fields
+            has_tokens = bool(
+                child.findall(".//" + qn("w:fldSimple")) or
+                child.findall(".//" + qn("w:instrText")) or
+                child.findall(".//" + qn("w:fldChar"))
+            )
             if not (paragraph_text or has_tokens):
                 continue
 
@@ -656,6 +668,30 @@ def _token_variants(token: str, sub_name: str) -> list[str]:
     return deduped
 
 
+def _collect_indexed_body_paragraphs(doc: Document) -> list[Paragraph]:
+    """Collect non-empty/tokenized body paragraphs in document order, including nested content."""
+    body_el = doc._element.find(".//" + qn("w:body"))
+    if body_el is None:
+        return []
+
+    paragraphs: list[Paragraph] = []
+    for p_el in body_el.findall(".//" + qn("w:p")):
+        if p_el.getparent() is None:
+            continue
+
+        texts = [(t.text or "") for t in p_el.findall(".//" + qn("w:t"))]
+        paragraph_text = "".join(texts).strip()
+        has_tokens = bool(
+            p_el.findall(".//" + qn("w:fldSimple")) or
+            p_el.findall(".//" + qn("w:instrText")) or
+            p_el.findall(".//" + qn("w:fldChar"))
+        )
+        if paragraph_text or has_tokens:
+            paragraphs.append(Paragraph(p_el, doc))
+
+    return paragraphs
+
+
 def _inject_repeat_block_by_section_tokens(doc: Document, field: dict[str, Any], value: list[Any]) -> bool:
     """Fallback repeat-block injection using token occurrences within the field's section."""
     if not value:
@@ -738,8 +774,114 @@ def _inject_repeat_block_by_section_tokens(doc: Document, field: dict[str, Any],
     return injected_any
 
 
+def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any]) -> bool:
+    """Inject flat array fields into their mapped paragraph blocks, duplicating as needed."""
+    if not isinstance(value, list) or not value:
+        return False
+
+    source_block_ids = field.get("source_block_ids") or []
+    if not source_block_ids:
+        return False
+
+    token = field.get("template_token") or field.get("token") or f"[{field.get('name')}]"
+    injected_any = False
+
+    # Filter out empty/invalid items
+    items = [_serialize_value(item, "scalar") for item in value if item is not None]
+    items = [item for item in items if item.strip()]
+
+    if not items:
+        return False
+
+    # Resolve all body paragraphs once for fast lookup
+    # NOTE: Must match the visual extraction block indexing exactly — include w:fldChar
+    # (complex field / Macrobutton) paragraphs so that b_XXX indices align correctly.
+    body_el = doc._element.find(".//" + qn("w:body"))
+    all_body_paras: list[Paragraph] = []
+    if body_el is not None:
+        for child in body_el:
+            if child.tag != qn("w:p"):
+                continue
+            texts = [(t.text or "") for t in child.findall(".//" + qn("w:t"))]
+            paragraph_text = "".join(texts).strip()
+            has_tokens = bool(
+                child.findall(".//" + qn("w:fldSimple")) or
+                child.findall(".//" + qn("w:instrText")) or
+                child.findall(".//" + qn("w:fldChar"))
+            )
+            if not (paragraph_text or has_tokens):
+                continue
+            all_body_paras.append(Paragraph(child, doc))
+
+    def get_para_by_id(block_id: str) -> Paragraph | None:
+        if block_id.startswith("b_"):
+            parts = block_id.split("_")
+            if len(parts) == 2:
+                try:
+                    p_idx = int(parts[1])
+                    if 0 <= p_idx < len(all_body_paras):
+                        return all_body_paras[p_idx]
+                except ValueError:
+                    pass
+        return None
+
+    resolved_paras: list[Paragraph] = []
+    for b_id in source_block_ids:
+        para = get_para_by_id(b_id)
+        if para is not None:
+            resolved_paras.append(para)
+
+    if not resolved_paras:
+        return False
+
+    num_items = len(items)
+    n_paras = len(resolved_paras)
+
+    # For the first n_paras - 1 paragraphs:
+    for idx in range(n_paras - 1):
+        para = resolved_paras[idx]
+        item_val = items[idx] if idx < num_items else ""
+        if _replace_token_in_paragraph(para, token, item_val):
+            injected_any = True
+
+    # For the last paragraph:
+    last_para = resolved_paras[-1]
+    last_idx = n_paras - 1
+
+    if last_idx < num_items:
+        # Keep a deepcopy of the original element before replacement
+        p_elem = last_para._element
+        p_parent = p_elem.getparent()
+        orig_p_elem = copy.deepcopy(p_elem)
+
+        # Inject into the last para itself
+        if _replace_token_in_paragraph(last_para, token, items[last_idx]):
+            injected_any = True
+
+        # Inject subsequent items by duplicating the original paragraph
+        insert_after_para = last_para
+        for item in items[last_idx + 1:]:
+            cloned_el = copy.deepcopy(orig_p_elem)
+            cloned_para = Paragraph(cloned_el, last_para._parent)
+            _replace_token_in_paragraph(cloned_para, token, item)
+
+            p_elem = insert_after_para._element
+            p_parent = p_elem.getparent()
+            if p_parent is not None:
+                p_index = p_parent.index(p_elem)
+                p_parent.insert(p_index + 1, cloned_el)
+                insert_after_para = cloned_para
+                injected_any = True
+    else:
+        # Fewer items than paragraphs. Clear the last paragraph.
+        if _replace_token_in_paragraph(last_para, token, ""):
+            injected_any = True
+
+    return injected_any
+
+
 def _inject_repeat_block_targeted(doc: Document, field: dict[str, Any], value: Any) -> bool:
-    """Inject array_object repeat-block fields into their mapped paragraph blocks."""
+    """Inject array_object repeat-block fields into their mapped paragraph blocks, duplicating patterns as needed."""
     if not isinstance(value, list) or not value:
         return False
 
@@ -756,72 +898,191 @@ def _inject_repeat_block_targeted(doc: Document, field: dict[str, Any], value: A
         sf.get("name", ""): sf.get("field_type", "scalar") for sf in sub_fields if sf.get("name")
     }
 
-    injected_any = False
+    # Resolve all body paragraphs once for fast lookup
+    # NOTE: Must match the visual extraction block indexing exactly — include w:fldChar
+    # (complex field / Macrobutton) paragraphs so that b_XXX indices align correctly.
+    body_el = doc._element.find(".//" + qn("w:body"))
+    all_body_paras: list[Paragraph] = []
+    if body_el is not None:
+        for child in body_el:
+            if child.tag != qn("w:p"):
+                continue
+            texts = [(t.text or "") for t in child.findall(".//" + qn("w:t"))]
+            paragraph_text = "".join(texts).strip()
+            has_tokens = bool(
+                child.findall(".//" + qn("w:fldSimple")) or
+                child.findall(".//" + qn("w:instrText")) or
+                child.findall(".//" + qn("w:fldChar"))
+            )
+            if not (paragraph_text or has_tokens):
+                continue
+            all_body_paras.append(Paragraph(child, doc))
+
+    def get_para_by_id(block_id: str) -> Paragraph | None:
+        if block_id.startswith("b_"):
+            parts = block_id.split("_")
+            if len(parts) == 2:
+                try:
+                    p_idx = int(parts[1])
+                    if 0 <= p_idx < len(all_body_paras):
+                        return all_body_paras[p_idx]
+                except ValueError:
+                    pass
+        return None
+
+    # Step 1: Build the base pattern
+    base_paras: list[Paragraph] = []
+    sf_to_para_idx: dict[str, int] = {}
 
     if repeat_items:
-        # Preferred path: explicit row->block mapping from template analysis.
-        for row_idx, block_map in enumerate(repeat_items):
-            if row_idx >= len(value):
-                break
-            row_item = value[row_idx]
-            if not isinstance(row_item, dict):
-                continue
-
-            for sub_name, block_id in block_map.items():
-                token = block_tokens.get(sub_name) or f"[{sub_name}]"
-                sub_val = _get_item_value_for_subfield(row_item, sub_name)
-                serialized = _serialize_value(sub_val, sub_field_type.get(sub_name, "scalar"))
-                if serialized and _inject_targeted_value(
-                    doc,
-                    field.get("name", ""),
-                    token,
-                    serialized,
-                    {"source_block_ids": [block_id], "render_contract": field.get("render_contract") or {}},
-                ):
-                    injected_any = True
-
-        if injected_any:
-            return True
-        # Fallback when source block IDs drift from actual template layout.
-        return _inject_repeat_block_by_section_tokens(doc, field, value)
-
-    # Fallback path for legacy manifests without repeat_items: consume source blocks in order.
-    flat_positions: list[tuple[str, str]] = []
-    block_idx = 0
-    for _row in value:
+        block_map = repeat_items[0]
+        resolved_blocks = []
         for sf in sub_fields:
-            if block_idx >= len(source_block_ids):
-                break
+            sf_name = sf.get("name", "")
+            b_id = block_map.get(sf_name)
+            if b_id:
+                para = get_para_by_id(b_id)
+                if para is not None:
+                    resolved_blocks.append((sf_name, b_id, para))
+
+        def get_p_idx(item):
+            b_id = item[1]
+            try:
+                return int(b_id.split("_")[1])
+            except (ValueError, IndexError):
+                return 0
+
+        resolved_blocks.sort(key=get_p_idx)
+        base_paras = [item[2] for item in resolved_blocks]
+        for idx, item in enumerate(resolved_blocks):
+            sf_name = item[0]
+            sf_to_para_idx[sf_name] = idx
+    else:
+        for b_id in source_block_ids:
+            para = get_para_by_id(b_id)
+            if para is not None:
+                base_paras.append(para)
+
+        for sf in sub_fields:
             sf_name = sf.get("name", "")
             if not sf_name:
                 continue
-            flat_positions.append((sf_name, source_block_ids[block_idx]))
-            block_idx += 1
+            sf_token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
+            variants = _token_variants(sf_token, sf_name)
 
-    pos_idx = 0
-    for row_item in value:
+            for idx, para in enumerate(base_paras):
+                if any(_paragraph_contains_token(para, v) for v in variants):
+                    sf_to_para_idx[sf_name] = idx
+                    break
+
+    if not base_paras:
+        # Fallback to section-based tokens if we cannot build a base pattern
+        return _inject_repeat_block_by_section_tokens(doc, field, value)
+
+    # Step 2: Keep deep copy of original elements for cloning
+    orig_elements = [copy.deepcopy(p._element) for p in base_paras]
+
+    injected_any = False
+    insert_after_para = base_paras[-1]
+
+    # Step 3: Inject and duplicate
+    for row_idx, row_item in enumerate(value):
         if not isinstance(row_item, dict):
             continue
-        for sf in sub_fields:
-            if pos_idx >= len(flat_positions):
-                break
-            sf_name, block_id = flat_positions[pos_idx]
-            pos_idx += 1
-            token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
-            sub_val = _get_item_value_for_subfield(row_item, sf_name)
-            serialized = _serialize_value(sub_val, sf.get("field_type", "scalar"))
-            if serialized and _inject_targeted_value(
-                doc,
-                field.get("name", ""),
-                token,
-                serialized,
-                {"source_block_ids": [block_id], "render_contract": field.get("render_contract") or {}},
-            ):
-                injected_any = True
 
-    if injected_any:
-        return True
-    return _inject_repeat_block_by_section_tokens(doc, field, value)
+        if row_idx == 0:
+            # Reuse base_paras in-place
+            for sf in sub_fields:
+                sf_name = sf.get("name", "")
+                if sf_name not in sf_to_para_idx:
+                    continue
+                pat_idx = sf_to_para_idx[sf_name]
+                para = base_paras[pat_idx]
+                
+                sf_token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
+                variants = _token_variants(sf_token, sf_name)
+                sf_value = _get_item_value_for_subfield(row_item, sf_name)
+                serialized = _serialize_value(sf_value, sub_field_type.get(sf_name, "scalar"))
+                
+                if _replace_any_token_in_paragraph(para, variants, serialized):
+                    injected_any = True
+            insert_after_para = base_paras[-1]
+
+        elif repeat_items and row_idx < len(repeat_items):
+            # Reuse existing dummy block in-place
+            block_map = repeat_items[row_idx]
+            max_p_idx = -1
+            last_para_of_block = None
+
+            for sf in sub_fields:
+                sf_name = sf.get("name", "")
+                b_id = block_map.get(sf_name)
+                if not b_id:
+                    continue
+                para = get_para_by_id(b_id)
+                if para is None:
+                    continue
+
+                if b_id.startswith("b_"):
+                    try:
+                        p_idx = int(b_id.split("_")[1])
+                        if p_idx > max_p_idx:
+                            max_p_idx = p_idx
+                            last_para_of_block = para
+                    except ValueError:
+                        pass
+
+                sf_token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
+                variants = _token_variants(sf_token, sf_name)
+                sf_value = _get_item_value_for_subfield(row_item, sf_name)
+                serialized = _serialize_value(sf_value, sub_field_type.get(sf_name, "scalar"))
+
+                if _replace_any_token_in_paragraph(para, variants, serialized):
+                    injected_any = True
+
+            if last_para_of_block:
+                insert_after_para = last_para_of_block
+
+        else:
+            # Duplicate the base pattern and insert
+            new_clones = []
+            for pat_idx, orig_el in enumerate(orig_elements):
+                cloned_el = copy.deepcopy(orig_el)
+                cloned_para = Paragraph(cloned_el, base_paras[pat_idx]._parent)
+
+                # Inject values into the cloned element
+                for sf in sub_fields:
+                    sf_name = sf.get("name", "")
+                    if sf_to_para_idx.get(sf_name) == pat_idx:
+                        sf_token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
+                        variants = _token_variants(sf_token, sf_name)
+                        sf_value = _get_item_value_for_subfield(row_item, sf_name)
+                        serialized = _serialize_value(sf_value, sub_field_type.get(sf_name, "scalar"))
+                        _replace_any_token_in_paragraph(cloned_para, variants, serialized)
+
+                # Insert cloned_el right after insert_after_para
+                p_elem = insert_after_para._element
+                p_parent = p_elem.getparent()
+                if p_parent is not None:
+                    p_index = p_parent.index(p_elem)
+                    p_parent.insert(p_index + 1, cloned_el)
+                    insert_after_para = cloned_para
+                    injected_any = True
+
+    # Step 4: Clear any unused pre-existing dummy blocks
+    if repeat_items and len(value) < len(repeat_items):
+        for unused_idx in range(len(value), len(repeat_items)):
+            block_map = repeat_items[unused_idx]
+            for sf_name, b_id in block_map.items():
+                para = get_para_by_id(b_id)
+                if para is not None:
+                    sf = next((s for s in sub_fields if s.get("name") == sf_name), None)
+                    if sf:
+                        sf_token = block_tokens.get(sf_name) or sf.get("template_token") or f"[{sf_name}]"
+                        variants = _token_variants(sf_token, sf_name)
+                        _replace_any_token_in_paragraph(para, variants, "")
+
+    return injected_any
 
 
 def inject_data_into_docx(
@@ -835,6 +1096,7 @@ def inject_data_into_docx(
     mergefield_map: dict[str, str] = {}   # mergefield_name_in_xml → value
     text_placeholder_map: dict[str, str] = {}  # placeholder_text → value
     table_data_map: dict[str, list[dict[str, str]]] = {} # table_name -> list of dict values mapped by xml sub-field
+    populated_fields: set[str] = set()
 
     # 1. Targeted injection pass first to handle visual block mappings (like multi-use [Type text])
     targeted_injected_fields = set()
@@ -849,6 +1111,7 @@ def inject_data_into_docx(
             continue
             
         serialized = _serialize_value(value, ftype)
+        populated_fields.add(fname)
         token = field.get("template_token") or field.get("token") or f"{{{{{fname}}}}}"
         clean_token = token
         if token.upper().startswith("MERGEFIELD "):
@@ -862,6 +1125,14 @@ def inject_data_into_docx(
         if injection_type == "text_placeholder" or not injection_type:
             if render_strategy == "mailmerge_table_region":
                 injection_type = "table_merge_row"
+
+        if ftype == "array" and field.get("source_block_ids"):
+            if _inject_array_targeted(doc, field, value):
+                targeted_injected_fields.add(fname)
+                print(f"  [Targeted Array] successfully replaced {fname} using source block mappings")
+            else:
+                print(f"  [Targeted Array] no replacements performed for {fname}")
+            continue
 
         if ftype in ("array", "array_object") and render_strategy == "repeat_block" and field.get("source_block_ids"):
             if _inject_repeat_block_targeted(doc, field, value):
@@ -915,6 +1186,7 @@ def inject_data_into_docx(
             continue
             
         serialized = _serialize_value(value, ftype)
+        populated_fields.add(fname)
 
         token = field.get("template_token") or field.get("token") or f"{{{{{fname}}}}}"
         clean_token = token
@@ -1005,6 +1277,64 @@ def inject_data_into_docx(
     _inject_array_paragraphs(doc, extracted, manifest_fields)
     _inject_mergefields(doc, mergefield_map)
     _inject_text_placeholders(doc, text_placeholder_map)
+
+    # Final guardrail: clear any remaining known manifest tokens so unresolved
+    # placeholders/mergefields do not leak into rendered output.
+    unresolved_mergefields: dict[str, str] = {}
+    unresolved_text_tokens: dict[str, str] = {}
+    preserved_complex_tokens: list[str] = []
+    for field in manifest_fields:
+        fname = str(field.get("name") or "")
+        if not fname or fname not in populated_fields:
+            # Keep unresolved markers visible when the source value was missing.
+            token = str(field.get("template_token") or field.get("token") or "").strip()
+            if token:
+                preserved_complex_tokens.append(token)
+            for sub in field.get("sub_fields") or []:
+                stoken = str(sub.get("template_token") or "").strip()
+                if stoken:
+                    preserved_complex_tokens.append(stoken)
+            continue
+
+        token = str(field.get("template_token") or field.get("token") or "").strip()
+        if token:
+            if token.upper().startswith("MERGEFIELD "):
+                mf = token[len("MERGEFIELD "):].strip()
+                if mf:
+                    unresolved_mergefields[mf] = ""
+            else:
+                unresolved_text_tokens[token] = ""
+                if token.startswith("[") and token.endswith("]"):
+                    unresolved_text_tokens[token[1:-1].strip()] = ""
+                # Bare token names (e.g., CandidateID) can still back a MERGEFIELD
+                # display value, so include them in mergefield cleanup as well.
+                if token and not token.startswith("[") and not token.startswith("{"):
+                    unresolved_mergefields[token] = ""
+
+        for sub in field.get("sub_fields") or []:
+            stoken = str(sub.get("template_token") or "").strip()
+            if not stoken:
+                continue
+            if stoken.upper().startswith("MERGEFIELD "):
+                mf = stoken[len("MERGEFIELD "):].strip()
+                if mf:
+                    unresolved_mergefields[mf] = ""
+            else:
+                unresolved_text_tokens[stoken] = ""
+                if stoken.startswith("[") and stoken.endswith("]"):
+                    unresolved_text_tokens[stoken[1:-1].strip()] = ""
+                if stoken and not stoken.startswith("[") and not stoken.startswith("{"):
+                    unresolved_mergefields[stoken] = ""
+
+    if unresolved_mergefields:
+        _inject_mergefields(doc, unresolved_mergefields)
+    if unresolved_text_tokens:
+        _inject_text_placeholders(doc, unresolved_text_tokens)
+    if preserved_complex_tokens:
+        print(
+            "[Injector] Preserved complex tokens for visibility (not auto-cleared): "
+            f"{sorted(set(t for t in preserved_complex_tokens if t))}"
+        )
 
     out_io = BytesIO()
     doc.save(out_io)

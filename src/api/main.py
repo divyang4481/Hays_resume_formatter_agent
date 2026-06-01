@@ -64,10 +64,18 @@ async def upload_template(file: UploadFile = File(...)) -> TemplateCreateRespons
 
     content = await file.read()
     template_name = Path(file.filename).name
-    object_key = f"templates/{template_name}"
+    
+    # Automatically get next version and construct the versioned path: templates/v{version}/{template_name}
+    version = repo.get_next_template_version(template_name)
+    object_key = f"templates/v{version}/{template_name}"
+    
     object_store.put_bytes(object_key, content)
 
-    template_id, version = repo.create_template(template_name=template_name, object_key=object_key)
+    template_id, actual_version = repo.create_template(
+        template_name=template_name, 
+        object_key=object_key, 
+        version=version
+    )
     job = repo.create_job(JobType.TEMPLATE_ANALYSIS)
 
     queue_bus.push_template_analysis(
@@ -81,7 +89,7 @@ async def upload_template(file: UploadFile = File(...)) -> TemplateCreateRespons
 
     return TemplateCreateResponse(
         template_id=template_id,
-        version=version,
+        version=actual_version,
         status=JobStatus.QUEUED,
         analysis_job_id=job.job_id,
     )

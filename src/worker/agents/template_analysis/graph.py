@@ -6,14 +6,25 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
+from langchain_core.runnables import RunnableConfig
 
-from src.worker.agents.template_analysis.extractors.openxml_visual_extractor import extract_openxml_visual_evidence
-from src.worker.agents.template_analysis.extractors.python_docx_visual_extractor import extract_python_docx_visual_evidence
-from src.worker.agents.template_analysis.extractors.docling_visual_extractor import extract_docling_visual_evidence
-from src.worker.agents.template_analysis.visual_reconciler import reconcile_visual_evidence
+from src.worker.agents.template_analysis.extractors.openxml_visual_extractor import (
+    extract_openxml_visual_evidence,
+)
+from src.worker.agents.template_analysis.extractors.python_docx_visual_extractor import (
+    extract_python_docx_visual_evidence,
+)
+from src.worker.agents.template_analysis.extractors.docling_visual_extractor import (
+    extract_docling_visual_evidence,
+)
+from src.worker.agents.template_analysis.visual_reconciler import (
+    reconcile_visual_evidence,
+)
 from src.worker.agents.template_analysis.table_role_classifier import classify_tables
 from src.worker.agents.template_analysis.region_builder import build_visual_regions
-from src.worker.agents.template_analysis.visual_field_candidate_builder import build_visual_field_candidates
+from src.worker.agents.template_analysis.visual_field_candidate_builder import (
+    build_visual_field_candidates,
+)
 from src.worker.agents.template_analysis.visual_debug import build_visual_debug_report
 import os
 from pathlib import Path
@@ -21,7 +32,7 @@ from src.shared.config import settings
 
 
 from src.shared.models import GraphResult, JobStatus
-from src.shared.storage import object_store
+from src.shared.storage import object_store as default_object_store
 from src.worker.agents.template_analysis.extractors import (
     extract_docling_layout_evidence,
     extract_openxml_evidence,
@@ -33,13 +44,17 @@ from src.worker.agents.template_analysis.field_candidate_builder import (
     build_field_candidates_from_evidence,
 )
 from src.worker.agents.template_analysis.manifest_critic import critique_manifest
-from src.worker.agents.template_analysis.logical_field_grouper import group_logical_fields_from_candidates
+from src.worker.agents.template_analysis.logical_field_grouper import (
+    group_logical_fields_from_candidates,
+)
 from src.worker.agents.template_analysis.manifest_validator import (
     validate_manifest_fields_against_layout,
 )
+from src.worker.agentic_core import AgenticCore
 
 
 logger = logging.getLogger(__name__)
+
 TEMPLATE_ANALYSIS_PIPELINE_VERSION = "layout_v2_agentic_qc_2026_05_28"
 PIPELINE_VERSION = TEMPLATE_ANALYSIS_PIPELINE_VERSION
 
@@ -60,6 +75,67 @@ class TemplateAnalysisState(TypedDict):
     critic: dict[str, Any]
 
 
+def _merge_planned_with_grouped_locations(
+    planned_fields: list[dict[str, Any]], grouped_fields: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep planner semantics, but force deterministic injection anchors from grouped fields."""
+    grouped_by_name = {
+        str(f.get("name") or "").strip(): f
+        for f in grouped_fields
+        if str(f.get("name") or "").strip()
+    }
+
+    merged: list[dict[str, Any]] = []
+    for planned in planned_fields:
+        name = str(planned.get("name") or "").strip()
+        grouped = grouped_by_name.get(name)
+        if not grouped:
+            merged.append(planned)
+            continue
+
+        field = dict(planned)
+        grouped_block_ids = grouped.get("source_block_ids") or []
+        if grouped_block_ids:
+            field["source_block_ids"] = grouped_block_ids
+
+        planned_evidence = dict(field.get("template_evidence") or {})
+        grouped_evidence = dict(grouped.get("template_evidence") or {})
+        for k in (
+            "region_type",
+            "row_role",
+            "table_index",
+            "row_index",
+            "cell_index",
+            "label_text",
+            "value_text",
+            "section_heading",
+        ):
+            if k in grouped_evidence and grouped_evidence.get(k) not in (None, ""):
+                planned_evidence[k] = grouped_evidence.get(k)
+        if planned_evidence:
+            field["template_evidence"] = planned_evidence
+
+        planned_render = dict(field.get("render_contract") or {})
+        grouped_render = dict(grouped.get("render_contract") or {})
+
+        grouped_selector = grouped_render.get("occurrence_selector") or {}
+        if grouped_selector:
+            selector = dict(planned_render.get("occurrence_selector") or {})
+            selector.update(grouped_selector)
+            planned_render["occurrence_selector"] = selector
+
+        if grouped_render.get("render_strategy") == "repeat_block" or field.get("field_type") == "array_object":
+            for k in ("render_strategy", "anchor_token", "block_tokens", "repeat_items"):
+                if k in grouped_render and grouped_render.get(k) not in (None, "", []):
+                    planned_render[k] = grouped_render.get(k)
+
+        if planned_render:
+            field["render_contract"] = planned_render
+
+        merged.append(field)
+
+    return merged
+
 
 def _extract_visual_evidence(state: TemplateAnalysisState) -> TemplateAnalysisState:
     tb = state["template_bytes"]
@@ -70,6 +146,7 @@ def _extract_visual_evidence(state: TemplateAnalysisState) -> TemplateAnalysisSt
     state["visual_model"] = reconcile_visual_evidence(ox, pd, dl)
     return state
 
+
 def _build_visual_regions(state: TemplateAnalysisState) -> TemplateAnalysisState:
     model = state["visual_model"]
     classify_tables(model)
@@ -77,11 +154,13 @@ def _build_visual_regions(state: TemplateAnalysisState) -> TemplateAnalysisState
     state["visual_regions"] = regions
     return state
 
+
 def _build_visual_candidates(state: TemplateAnalysisState) -> TemplateAnalysisState:
     model = state["visual_model"]
     candidates = build_visual_field_candidates(model)
     state["field_candidates"] = candidates
     return state
+
 
 def _check_pipeline(state: TemplateAnalysisState) -> str:
     # Read feature flag
@@ -92,10 +171,17 @@ def _check_pipeline(state: TemplateAnalysisState) -> str:
         return "visual"
     return "legacy"
 
-def _load_template_bytes(state: TemplateAnalysisState) -> TemplateAnalysisState:
+
+def _load_template_bytes(state: TemplateAnalysisState, config: RunnableConfig) -> TemplateAnalysisState:
     if state.get("template_bytes"):
         return state
-    state["template_bytes"] = object_store.get_bytes(state["template_object_key"])
+    
+    # Retrieve object_store from configuration
+    os_service = config.get("configurable", {}).get("object_store")
+    if not os_service:
+        os_service = default_object_store
+        
+    state["template_bytes"] = os_service.get_bytes(state["template_object_key"])
     return state
 
 
@@ -121,27 +207,60 @@ def _build_candidates(state: TemplateAnalysisState) -> TemplateAnalysisState:
     return state
 
 
-
-
-def _group_validate_and_critic(state: TemplateAnalysisState) -> TemplateAnalysisState:
+def _group_validate_and_critic(state: TemplateAnalysisState, config: RunnableConfig) -> TemplateAnalysisState:
     raw = state.get("field_candidates", [])
     grouped = group_logical_fields_from_candidates(raw, state.get("layout", {}))
+    planned = grouped
+    use_llm_planner = os.environ.get(
+        "TEMPLATE_ANALYSIS_USE_LLM_PLANNER", "1"
+    ).strip().lower() not in {"0", "false", "no"}
+
+    if use_llm_planner:
+        try:
+            # Retrieve llm_client from configuration
+            planner = config.get("configurable", {}).get("llm_client")
+            if not planner:
+                planner = AgenticCore()
+                
+            planned_payload = planner.plan_manifest_from_evidence(
+                template_name=state.get("template_name") or "template.docx",
+                canonical_blocks=state.get("layout", {}).get("canonical_blocks", []),
+                field_candidates=grouped,
+                repeat_groups=state.get("layout", {}).get("repeat_groups", []),
+                use_strong_model=True,
+            )
+            planned_fields = (planned_payload or {}).get("fields") or []
+            if planned_fields:
+                planned = _merge_planned_with_grouped_locations(planned_fields, grouped)
+                logger.info(
+                    "[TemplateAnalysis] manifest_planner_fields=%s", len(planned_fields)
+                )
+        except Exception as exc:
+            logger.warning(
+                "[TemplateAnalysis] manifest planner failed, using grouped fields: %s",
+                exc,
+            )
+    else:
+        logger.info(
+            "[TemplateAnalysis] LLM manifest planner disabled by TEMPLATE_ANALYSIS_USE_LLM_PLANNER"
+        )
 
     pipeline_mode = os.environ.get("TEMPLATE_ANALYSIS_PIPELINE", "visual_v1")
     use_visual = pipeline_mode == "visual_v1"
 
     if use_visual:
-        validated = grouped # Bypass block validation since it's built from visual regions directly
+        validated = planned  # Visual pipeline preserves traceability on the planned fields already
     else:
         validated = validate_manifest_fields_against_layout(
-            grouped, {"blocks": state.get("layout", {}).get("canonical_blocks", [])}
+            planned, {"blocks": state.get("layout", {}).get("canonical_blocks", [])}
         )
-
 
     critic = critique_manifest({"fields": validated, "layout": state.get("layout", {})})
 
     duplicate_count = len(validated) - len({f.get("name") for f in validated})
-    repeat_groups_count = len([f for f in validated if f.get("field_type") == "array_object"])
+    repeat_groups_count = len(
+        [f for f in validated if f.get("field_type") == "array_object"]
+    )
     logger.info("[TemplateAnalysis] raw_candidates_count=%s", len(raw))
     logger.info("[TemplateAnalysis] grouped_fields_count=%s", len(grouped))
     logger.info("[TemplateAnalysis] duplicate_field_names=%s", max(0, duplicate_count))
@@ -151,7 +270,6 @@ def _group_validate_and_critic(state: TemplateAnalysisState) -> TemplateAnalysis
     state["fields"] = validated
     state["critic"] = critic
     return state
-
 
 
 def build_template_analysis_graph():
@@ -175,10 +293,7 @@ def build_template_analysis_graph():
     graph.add_conditional_edges(
         "load_template_bytes",
         _check_pipeline,
-        {
-            "visual": "extract_visual_evidence",
-            "legacy": "extract_evidence"
-        }
+        {"visual": "extract_visual_evidence", "legacy": "extract_evidence"},
     )
 
     graph.add_edge("extract_evidence", "build_candidates")
@@ -190,11 +305,21 @@ def build_template_analysis_graph():
 
     graph.add_edge("group_validate_and_critic", END)
     return graph.compile()
+
+
 def run_template_analysis(
-    template_id: str, template_name: str, template_object_key: str, template_bytes: bytes | None = None
+    template_id: str,
+    template_name: str,
+    template_object_key: str,
+    template_bytes: bytes | None = None,
+    object_store: Any | None = None,
+    llm_client: Any | None = None,
 ) -> GraphResult:
     print(f"[TemplateAnalysis] pipeline_version={TEMPLATE_ANALYSIS_PIPELINE_VERSION}")
     print(f"[TemplateAnalysis] graph_module={__file__}")
+
+    os_service = object_store or default_object_store
+    llm_service = llm_client or AgenticCore()
 
     app = build_template_analysis_graph()
     result = app.invoke(
@@ -209,7 +334,8 @@ def run_template_analysis(
             "fields": [],
             "grouped_fields": [],
             "critic": {},
-        }
+        },
+        {"configurable": {"object_store": os_service, "llm_client": llm_service}},
     )
     manifest = {
         "manifest_id": str(uuid4()),
@@ -225,8 +351,6 @@ def run_template_analysis(
         },
         "fields": result.get("fields", []),
     }
-
-    from src.shared.config import settings
 
     if settings.app_env != "production":
         manifest["debug"] = {
@@ -246,28 +370,108 @@ def run_template_analysis(
     )
     print(f"[TemplateAnalysis] fields_count={len(result.get('fields', []))}")
 
-
-    if settings.app_env != "production" and os.environ.get("TEMPLATE_ANALYSIS_PIPELINE", "visual_v1") == "visual_v1":
+    if (
+        settings.app_env != "production"
+        and os.environ.get("TEMPLATE_ANALYSIS_PIPELINE", "visual_v1") == "visual_v1"
+    ):
         visual_model = result.get("visual_model")
         if visual_model:
             output_dir = Path("artifacts") / "template_analysis" / template_id
-            debug_info = build_visual_debug_report(template_name, visual_model, manifest, output_dir)
-            manifest["debug"].update(debug_info)
+            debug_info = build_visual_debug_report(
+                template_name, visual_model, manifest, output_dir
+            )
+            db_debug_info = debug_info.copy()
+            db_debug_info.pop("visual_model_path", None)
+            db_debug_info.pop("visual_debug_html_path", None)
+            manifest["debug"].update(db_debug_info)
 
             # Additional logging required by acceptance criteria
-            print(f"[TemplateAnalysis] visual_regions_count={debug_info.get('visual_regions_count', 0)}")
-            print(f"[TemplateAnalysis] visual_tables_count={debug_info.get('visual_tables_count', 0)}")
-            label_value_rows = sum(1 for t in visual_model.tables for r in t.rows if r.role == 'label_value_row')
+            print(
+                f"[TemplateAnalysis] visual_regions_count={debug_info.get('visual_regions_count', 0)}"
+            )
+            print(
+                f"[TemplateAnalysis] visual_tables_count={debug_info.get('visual_tables_count', 0)}"
+            )
+            label_value_rows = sum(
+                1
+                for t in visual_model.tables
+                for r in t.rows
+                if r.role == "label_value_row"
+            )
             print(f"[TemplateAnalysis] label_value_rows_count={label_value_rows}")
-            mailmerge_regions = sum(1 for r in visual_model.regions if r.region_type == 'mailmerge_table_region')
+            mailmerge_regions = sum(
+                1
+                for r in visual_model.regions
+                if r.region_type == "mailmerge_table_region"
+            )
             print(f"[TemplateAnalysis] mailmerge_regions_count={mailmerge_regions}")
-            instruction_regions = sum(1 for r in visual_model.regions if r.region_type == 'instruction_region')
+            instruction_regions = sum(
+                1 for r in visual_model.regions if r.region_type == "instruction_region"
+            )
             print(f"[TemplateAnalysis] instruction_regions_count={instruction_regions}")
 
-            print(f"[TemplateAnalysis] visual_debug_html_path={debug_info.get('visual_debug_html_path', '')}")
-            print(f"[TemplateAnalysis] raw_visual_tokens_count={debug_info.get('raw_visual_tokens_count', 0)}")
-            print(f"[TemplateAnalysis] manifest_token_count={debug_info.get('manifest_token_count', 0)}")
-            print(f"[TemplateAnalysis] ignored_control_tokens={debug_info.get('ignored_control_tokens', [])}")
-
+            print(
+                f"[TemplateAnalysis] visual_debug_html_path={debug_info.get('visual_debug_html_path', '')}"
+            )
+            print(
+                f"[TemplateAnalysis] raw_visual_tokens_count={debug_info.get('raw_visual_tokens_count', 0)}"
+            )
+            print(
+                f"[TemplateAnalysis] manifest_token_count={debug_info.get('manifest_token_count', 0)}"
+            )
+            print(
+                f"[TemplateAnalysis] ignored_control_tokens={debug_info.get('ignored_control_tokens', [])}"
+            )
 
     return GraphResult(status=JobStatus.COMPLETED, data=manifest)
+
+
+class TemplateAnalysisAgent:
+    def __init__(self, object_store: Any = None, llm_client: Any = None, repo: Any = None) -> None:
+        self.object_store = object_store
+        self.llm_client = llm_client
+        self.repo = repo
+
+    def run_analysis(
+        self,
+        template_id: str,
+        template_name: str,
+        template_object_key: str,
+        template_bytes: bytes | None = None,
+        job_id: str | None = None,
+    ) -> GraphResult:
+        from src.shared.repository import active_job_id
+        token = active_job_id.set(job_id)
+        try:
+            # Load template bytes using object_store if not provided directly
+            tb = template_bytes
+            if not tb and template_object_key:
+                os_service = self.object_store or default_object_store
+                tb = os_service.get_bytes(template_object_key)
+
+            # Update job status in database if repo is provided
+            if self.repo and job_id:
+                self.repo.update_job(job_id, status=JobStatus.PROCESSING)
+
+            # Run the graph pipeline with injected dependencies passed through LangGraph config
+            result = run_template_analysis(
+                template_id=template_id,
+                template_name=template_name,
+                template_object_key=template_object_key,
+                template_bytes=tb,
+                object_store=self.object_store,
+                llm_client=self.llm_client,
+            )
+
+            # Save results and update status if repo is provided
+            if self.repo and job_id:
+                if result.status == JobStatus.COMPLETED:
+                    self.repo.save_manifest(template_id, result.data)
+                    self.repo.update_job(job_id, status=JobStatus.COMPLETED)
+                else:
+                    self.repo.update_job(job_id, status=JobStatus.FAILED, error=result.error)
+
+            return result
+        finally:
+            active_job_id.reset(token)
+

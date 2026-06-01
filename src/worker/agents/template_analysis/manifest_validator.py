@@ -40,7 +40,7 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             # For CV-like fields, require explicit placeholder-level CV evidence or instruction text,
             # not just a nearby heading mention.
             if not any(x in joined for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]) and "cv" not in placeholders and not any(x in instruction_text for x in ["candidate's own cv", "candidate cv", "paste candidate cv", "original cv"]):
-                reject_reason = "hallucinated_candidate_own_cv"
+                reject_reason = "hallucinated_cv_instruction_field"
                 _log_rejection(field, reject_reason)
                 continue
 
@@ -109,7 +109,9 @@ def validate_manifest_fields_against_layout(fields: list[dict], layout: dict) ->
             _log_rejection(field, reject_reason or "field_invalid")
             continue
 
-        if str(field.get("name") or "").strip().lower() == "candidate_own_cv":
+        if str((field.get("render_contract") or {}).get("render_strategy") or "").strip().lower() == "remove_instruction_text":
+            continue
+        if bool((field.get("template_evidence") or {}).get("is_instruction_only")):
             continue
         # Generic label-as-token guard: if the token looks like a bracket placeholder,
         # it must exist in source placeholders for this field.

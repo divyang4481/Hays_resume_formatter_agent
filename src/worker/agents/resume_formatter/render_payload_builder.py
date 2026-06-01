@@ -51,6 +51,114 @@ def _extract_fallback_position(cv_text: str | None) -> str | None:
     return None
 
 
+def _is_position_like_field(field: dict[str, Any]) -> bool:
+    semantic = _field_semantic_text(field)
+    return any(term in semantic for term in ("position", "job title", "title", "role", "designation"))
+
+
+def _field_semantic_text(field: dict[str, Any]) -> str:
+    parts = [
+        str(field.get(k) or "")
+        for k in ("name", "display_label", "source_hint", "template_token")
+    ]
+    for sub_field in (field.get("sub_fields") or []):
+        if not isinstance(sub_field, dict):
+            continue
+        parts.extend(
+            str(sub_field.get(k) or "")
+            for k in ("name", "display_label", "source_hint", "template_token")
+        )
+    return " ".join(parts).lower()
+
+
+def _extract_resume_blob_from_mappings(mappings: dict[str, Any]) -> str | None:
+    for key, entry in mappings.items():
+        value = (entry or {}).get("value")
+        if not isinstance(value, str):
+            continue
+        key_text = str(key or "").lower()
+        if any(marker in key_text for marker in ("cv", "resume", "original")) and len(value) > 120:
+            return value
+
+    for entry in mappings.values():
+        value = (entry or {}).get("value")
+        if isinstance(value, str) and ("\n" in value or "\r" in value) and len(value) > 200:
+            return value
+    return None
+
+
+def _extract_semantic_scalar_from_mappings(mappings: dict[str, Any], terms: tuple[str, ...]) -> str | None:
+    for key, entry in mappings.items():
+        key_text = str(key or "").lower()
+        if not any(term in key_text for term in terms):
+            continue
+        value = (entry or {}).get("value")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _resolve_mapping_with_sub_fields(field: dict[str, Any], mappings: dict[str, Any]) -> Any:
+    name = str(field.get("name") or "").strip()
+    if not name:
+        return None
+
+    direct_value = (mappings.get(name) or {}).get("value")
+    if direct_value not in (None, "", []):
+        return direct_value
+
+    sub_fields = field.get("sub_fields") or []
+    if not isinstance(sub_fields, list) or not sub_fields:
+        return direct_value
+
+    sub_values: dict[str, Any] = {}
+    for sub_field in sub_fields:
+        if not isinstance(sub_field, dict):
+            continue
+        sub_name = str(sub_field.get("name") or "").strip()
+        if not sub_name:
+            continue
+        sub_value = (mappings.get(sub_name) or {}).get("value")
+        if sub_value in (None, "", []):
+            continue
+        sub_values[sub_name] = sub_value
+
+    if not sub_values:
+        return direct_value
+
+    field_type = str(field.get("field_type") or "scalar").lower()
+    if field_type == "array_object":
+        max_len = max((len(v) for v in sub_values.values() if isinstance(v, list)), default=0)
+        if max_len > 0:
+            rows: list[dict[str, Any]] = []
+            for idx in range(max_len):
+                row: dict[str, Any] = {}
+                for sub_name, sub_value in sub_values.items():
+                    if isinstance(sub_value, list):
+                        if idx < len(sub_value):
+                            row[sub_name] = sub_value[idx]
+                    else:
+                        row[sub_name] = sub_value
+                if row:
+                    rows.append(row)
+            return rows
+        return [sub_values]
+
+    if field_type == "array":
+        for sub_value in sub_values.values():
+            if isinstance(sub_value, list):
+                return sub_value
+        return list(sub_values.values())
+
+    for sub_value in sub_values.values():
+        if isinstance(sub_value, list):
+            if sub_value:
+                return sub_value[0]
+            continue
+        return sub_value
+    return direct_value
+
+
 def build_filled_template_payload(
     manifest: dict,
     mapping_result: dict,
@@ -80,23 +188,26 @@ def build_filled_template_payload(
             mapped_value = recruiter_input.get(name)
             if not mapped_value:
                 mapped_value = (mappings.get(name) or {}).get("value")
-            if not mapped_value and name == "position_required":
-                cv_text = (mappings.get("candidate_own_cv") or {}).get("value")
-                mapped_value = _extract_fallback_position(cv_text) or \
-                               (mappings.get("current_position") or {}).get("value") or \
-                               (mappings.get("job_title") or {}).get("value")
+            if not mapped_value and _is_position_like_field(field):
+                cv_text = _extract_resume_blob_from_mappings(mappings)
+                mapped_value = _extract_fallback_position(cv_text) or _extract_semantic_scalar_from_mappings(
+                    mappings,
+                    ("position", "title", "role", "designation"),
+                )
         elif source_classification == "ats_input":
             mapped_value = ats_input.get(name)
         else:
-            mapped_value = (mappings.get(name) or {}).get("value")
+            mapped_value = _resolve_mapping_with_sub_fields(field, mappings)
 
-        if (mapped_value is None or mapped_value == [] or mapped_value == "") and required and source_classification in (
+        if (mapped_value is None or mapped_value == [] or mapped_value == "") and source_classification in (
             "input_only",
             "recruiter_input",
             "ats_input",
         ):
-            payload.missing_fields_requiring_recruiter_or_ats_input.append(name)
-            continue
+            if name not in payload.missing_fields_requiring_recruiter_or_ats_input:
+                payload.missing_fields_requiring_recruiter_or_ats_input.append(name)
+            if required:
+                continue
 
         token = field.get("template_token") or field.get("render_contract", {}).get("anchor_token") or name
         if render_strategy == "mergefield_replace":

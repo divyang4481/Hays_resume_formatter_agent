@@ -13,8 +13,10 @@ Map resume data to the manifest fields below.
 Instructions:
 - Each field may include a search_hint; use it to locate likely resume sections/phrases before extracting values.
 - Prioritize evidence near headings or terms referenced by search_hint, then validate with nearby text.
+- Each field may also include template_evidence and render_contract metadata; use that planned schema context to decide whether the value is scalar, array, or array_object and how many entries to return.
 - If a field has field_type "array_object", extract all visible entries from the resume into a JSON array of objects.
 - Use the sub_fields in each array_object field as the object keys.
+- For repeatable sections, use the section heading and block_tokens from the manifest plan to keep entries grouped correctly.
 - For work experience fields, each array item should represent one role or employment entry.
 - For array fields, return a JSON array of strings.
 - For scalar fields, return a single string.

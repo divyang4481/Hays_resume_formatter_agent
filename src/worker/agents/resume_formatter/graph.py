@@ -74,6 +74,25 @@ def _collect_section_lines(raw_resume_text: str, heading_terms: list[str], max_l
     collected: list[str] = []
     in_section = False
 
+    def _looks_like_new_heading(text: str) -> bool:
+        if not text:
+            return False
+        if text.endswith(":"):
+            return True
+        if len(text) > 60:
+            return False
+
+        words = re.findall(r"[A-Za-z][A-Za-z'&/\-]*", text)
+        if not words or len(words) > 7:
+            return False
+
+        if text.isupper():
+            return True
+
+        skip = {"and", "or", "of", "in", "to", "for", "the", "a", "an", "with"}
+        significant = [w for w in words if w.lower() not in skip]
+        return bool(significant) and all(w[0].isupper() for w in significant)
+
     for line in lines:
         normalized = re.sub(r"\s+", " ", line).strip()
         low = normalized.lower()
@@ -83,14 +102,23 @@ def _collect_section_lines(raw_resume_text: str, heading_terms: list[str], max_l
             continue
 
         is_new_heading = any(h in low for h in lowered_headings)
-        looks_like_heading = len(normalized) <= 60 and normalized.endswith(":")
+        looks_like_heading = _looks_like_new_heading(normalized)
 
         if is_new_heading:
             in_section = True
             continue
 
         if in_section and looks_like_heading:
-            break
+            # Keep likely content rows (for example education/employment entries)
+            # even when they are title-cased, if they carry content signals.
+            has_content_signal = bool(
+                re.search(r"\b(?:19|20)\d{2}\b", normalized)
+                or "," in normalized
+                or " - " in normalized
+                or " at " in low
+            )
+            if not has_content_signal:
+                break
 
         if in_section:
             item = normalized.lstrip("-•* ").strip()
@@ -132,10 +160,182 @@ def _extract_skills(raw_resume_text: str) -> list[str]:
 def _extract_qualifications(raw_resume_text: str) -> list[str]:
     qual_lines = _collect_section_lines(
         raw_resume_text,
-        ["professional qualifications", "qualifications", "certifications", "certificates", "accreditation"],
+        [
+            "professional qualifications",
+            "professional qualification",
+            "qualifications",
+            "qualification",
+            "certifications",
+            "certification",
+            "certificates",
+            "certificate",
+            "accreditation",
+            "accreditations",
+            "courses",
+        ],
         max_lines=10,
     )
-    return [q for q in qual_lines if q][:8]
+
+    if not qual_lines:
+        # Fallback for CV formats that list certifications inline without a dedicated section.
+        for raw_line in raw_resume_text.splitlines():
+            normalized = raw_line.strip().lstrip("-•* ").strip()
+            if not normalized:
+                continue
+            low = normalized.lower()
+            if any(k in low for k in ("certified", "certification", "certificate", "accredit")):
+                qual_lines.append(normalized)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for qual in qual_lines:
+        key = qual.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(qual)
+
+    return deduped[:8]
+
+
+def _array_object_item_key(field: dict[str, Any]) -> str:
+    sub_fields = field.get("sub_fields")
+    if isinstance(sub_fields, list):
+        for sf in sub_fields:
+            key = str((sf or {}).get("name") or "").strip()
+            if key:
+                return key
+    return "value"
+
+
+def _normalize_array_object_value(field: dict[str, Any], value: Any) -> list[dict[str, Any]]:
+    primary_key = _array_object_item_key(field)
+
+    if isinstance(value, dict):
+        return [value]
+
+    if isinstance(value, list):
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            elif isinstance(item, str) and item.strip():
+                normalized.append({primary_key: item.strip()})
+        return normalized
+
+    if isinstance(value, str) and value.strip():
+        return [{primary_key: value.strip()}]
+
+    return []
+
+
+def _heuristic_array_object_value(field: dict[str, Any], raw_resume_text: str) -> list[dict[str, Any]]:
+    heading_terms: list[str] = []
+    heading_sources: list[str] = [
+        str(field.get("display_label") or ""),
+        str(field.get("source_hint") or ""),
+        str(field.get("name") or "").replace("_", " "),
+        str((field.get("template_evidence") or {}).get("section_heading") or ""),
+        str(field.get("template_token") or "").replace("_", " "),
+    ]
+
+    for sub_field in field.get("sub_fields") or []:
+        if not isinstance(sub_field, dict):
+            continue
+        heading_sources.append(str(sub_field.get("display_label") or ""))
+        heading_sources.append(str(sub_field.get("name") or "").replace("_", " "))
+        heading_sources.append(str(sub_field.get("template_token") or "").replace("_", " "))
+
+    stop_words = {
+        "and",
+        "the",
+        "for",
+        "with",
+        "from",
+        "that",
+        "this",
+        "type",
+        "text",
+        "bullet",
+        "point",
+        "list",
+    }
+
+    seen_terms: set[str] = set()
+    for source in heading_sources:
+        cleaned = re.sub(r"[^a-zA-Z0-9\s]+", " ", source).strip().lower()
+        if not cleaned:
+            continue
+
+        if len(cleaned) >= 4 and cleaned not in stop_words and cleaned not in seen_terms:
+            heading_terms.append(cleaned)
+            seen_terms.add(cleaned)
+
+        for token in cleaned.split():
+            if len(token) < 6 or token in stop_words or token in seen_terms:
+                continue
+            heading_terms.append(token)
+            seen_terms.add(token)
+
+    if not heading_terms:
+        return []
+
+    lines = _collect_section_lines(raw_resume_text, heading_terms, max_lines=24)
+    if not lines:
+        return []
+
+    sub_fields = field.get("sub_fields") or []
+    sub_names = [str((sf or {}).get("name") or "").strip() for sf in sub_fields if isinstance(sf, dict)]
+    primary_key = _array_object_item_key(field)
+
+    list_like_sub_field = None
+    for sf in sub_fields:
+        if not isinstance(sf, dict):
+            continue
+        name = str(sf.get("name") or "").strip()
+        sf_type = str(sf.get("field_type") or "").lower()
+        if sf_type == "array" or any(term in name.lower() for term in ("bullet", "responsibilit", "dutie", "grade", "achievement")):
+            list_like_sub_field = name
+            break
+
+    organisation_key = next((n for n in sub_names if "organisation" in n.lower() or "company" in n.lower() or "employer" in n.lower()), None)
+
+    rows: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    date_re = re.compile(r"\b(?:19|20)\d{2}\b|\b(?:present|current)\b", re.IGNORECASE)
+
+    for line in lines:
+        text = re.sub(r"\s+", " ", line).strip()
+        if not text:
+            continue
+
+        starts_new = current is None or bool(date_re.search(text))
+        if not starts_new and len(text) <= 72 and any(sep in text.lower() for sep in (" at ", " - ", " | ")):
+            starts_new = True
+
+        if starts_new:
+            if current:
+                rows.append(current)
+            current = {primary_key: text}
+
+            if organisation_key and " at " in text.lower():
+                org = text.split(" at ", 1)[1].strip(" -|, ")
+                if org:
+                    current[organisation_key] = org
+            continue
+
+        if current is None:
+            current = {primary_key: text}
+            continue
+
+        if list_like_sub_field:
+            arr = current.setdefault(list_like_sub_field, [])
+            if isinstance(arr, list):
+                arr.append(text)
+
+    if current:
+        rows.append(current)
+
+    return rows
 
 
 def _heuristic_value_for_field(field: dict[str, Any], raw_resume_text: str) -> Any:
@@ -145,7 +345,12 @@ def _heuristic_value_for_field(field: dict[str, Any], raw_resume_text: str) -> A
     ).lower()
     field_type = str(field.get("field_type") or "scalar").lower()
 
-    if "candidate_name" in semantic or "full name" in semantic:
+    if field_type == "array_object":
+        rows = _heuristic_array_object_value(field, raw_resume_text)
+        if rows:
+            return rows
+
+    if "full name" in semantic or ("name" in semantic and any(t in semantic for t in ("candidate", "person", "profile"))):
         return _extract_name_candidate(raw_resume_text)
 
     if "skill" in semantic:
@@ -161,8 +366,10 @@ def _heuristic_value_for_field(field: dict[str, Any], raw_resume_text: str) -> A
         if not quals:
             return None
         if field_type.startswith("array"):
-            # Preserve shape expected by array_object fields.
-            return [{"check_type": q} for q in quals]
+            if field_type == "array_object":
+                item_key = _array_object_item_key(field)
+                return [{item_key: q} for q in quals]
+            return quals
         return ", ".join(quals)
 
     if "notice" in semantic:
@@ -215,6 +422,55 @@ def _apply_heuristic_resume_fact_fallback(
     return applied
 
 
+def _normalize_and_backfill_array_object_fields(
+    *,
+    fields: list[dict[str, Any]],
+    field_mappings: dict[str, Any],
+    raw_resume_text: str,
+) -> int:
+    applied = 0
+    for field in fields:
+        field_type = str(field.get("field_type") or "scalar").lower()
+        if field_type != "array_object":
+            continue
+
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+
+        entry = field_mappings.get(name) or {}
+        existing_value = entry.get("value")
+        normalized_existing = _normalize_array_object_value(field, existing_value)
+        if normalized_existing:
+            if normalized_existing != existing_value:
+                field_mappings[name] = {
+                    **entry,
+                    "value": normalized_existing,
+                    "status": "mapped",
+                    "confidence": max(float(entry.get("confidence") or 0.0), 0.5),
+                }
+                applied += 1
+            continue
+
+        fallback_rows = _heuristic_array_object_value(field, raw_resume_text)
+        if not fallback_rows:
+            continue
+
+        field_mappings[name] = {
+            "value": fallback_rows,
+            "status": "mapped",
+            "confidence": 0.45,
+            "source": {
+                "page": 1,
+                "section": "Heuristic Array Fallback",
+                "evidence_text": "Recovered repeatable entries from resume section headings.",
+            },
+        }
+        applied += 1
+
+    return applied
+
+
 def _is_instruction_resume_field(field: dict[str, Any]) -> bool:
     render_strategy = str((field.get("render_contract") or {}).get("render_strategy") or "").strip().lower()
     if render_strategy == "remove_instruction_text":
@@ -229,7 +485,17 @@ def _is_instruction_resume_field(field: dict[str, Any]) -> bool:
         str(field.get(k) or "")
         for k in ("name", "display_label", "template_token", "source_hint")
     ).lower()
-    return "candidate_own_cv" in text_probe
+    return any(
+        marker in text_probe
+        for marker in (
+            "candidate own cv",
+            "candidate's own cv",
+            "original cv",
+            "paste cv",
+            "full resume",
+            "resume text",
+        )
+    )
 
 
 def _apply_instruction_resume_fields(
@@ -417,12 +683,30 @@ def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
         print(f"[ExtractData] Extracted {len(extracted)} fields: {list(extracted.keys())}")
     except Exception as e:
         print(f"[ExtractData] LLM extraction failed ({e}), using heuristic fallback")
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        extracted = {"field_mappings": {
-            "candidate_name": {"value": lines[0] if lines else "Unknown Candidate"},
-            "candidate_fullname": {"value": lines[0] if lines else "Unknown Candidate"},
-            "candidate_email": {"value": next((x for x in lines if "@" in x), "")},
-        }}
+        extracted = {"field_mappings": {}}
+        for field in fields:
+            name = str(field.get("name") or "").strip()
+            if not name:
+                continue
+
+            value = _heuristic_value_for_field(field, raw_text)
+            field_type = str(field.get("field_type") or "scalar").lower()
+            if _is_empty_mapped_value(value):
+                if field_type == "array_object" or field_type == "array":
+                    value = []
+                else:
+                    value = ""
+
+            extracted["field_mappings"][name] = {
+                "value": value,
+                "status": "mapped" if not _is_empty_mapped_value(value) else "missing",
+                "confidence": 0.35 if not _is_empty_mapped_value(value) else 0.0,
+                "source": {
+                    "page": 1,
+                    "section": "Heuristic Resume Fallback",
+                    "evidence_text": "Derived from deterministic semantic parsing.",
+                },
+            }
 
     field_mappings = extracted.setdefault("field_mappings", {})
 
@@ -464,18 +748,16 @@ def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
     if heuristic_recovered:
         print(f"[ExtractData] Heuristic fallback recovered {heuristic_recovered} fields")
 
+    complex_recovered = _normalize_and_backfill_array_object_fields(
+        fields=fields,
+        field_mappings=field_mappings,
+        raw_resume_text=raw_text,
+    )
+    if complex_recovered:
+        print(f"[ExtractData] Array-object fallback recovered/normalized {complex_recovered} fields")
+
     state["resume_fact_result"] = extracted
     
-    # Ensure candidate_own_cv is populated with the original resume text
-    if "candidate_own_cv" in [f.get("name") for f in (state.get("manifest") or {}).get("fields", [])]:
-        if "candidate_own_cv" not in field_mappings or field_mappings["candidate_own_cv"].get("value") is None:
-            field_mappings["candidate_own_cv"] = {
-                "value": raw_text,
-                "status": "mapped",
-                "confidence": 1.0,
-                "source": {"page": 1, "section": "Original CV", "evidence_text": "Full original resume text injected."}
-            }
-
     return state
 
 
@@ -701,48 +983,53 @@ def run_resume_format(
     resume_text: str | None = None,
     resume_object_key: str | None = None,
 ) -> GraphResult:
-    app = build_resume_format_graph()
-    result = app.invoke(
-        {
-            "job_id": job_id,
-            "template_id": template_id,
-            "resume_text": resume_text,
-            "resume_object_key": resume_object_key,
-            "raw_resume_text": None,
-            "resume_summary": None,
-            "suggested_templates": [],
-            "manifest": None,
-            "resume_fact_fields": [],
-            "generated_fields": [],
-            "input_only_fields": [],
-            "recruiter_input_fields": [],
-            "ats_input_fields": [],
-            "resume_fact_result": {},
-            "generated_result": {},
-            "recruiter_input_result": {},
-            "ats_input_result": {},
-            "mapping_result": {},
-            "render_payload": {},
-            "extracted": {},
-            "filled_manifest": None,
-            "rendered_bytes": None,
-            "status": JobStatus.QUEUED,
-            "error": None,
-        }
-    )
+    from src.shared.repository import active_job_id
+    token = active_job_id.set(job_id)
+    try:
+        app = build_resume_format_graph()
+        result = app.invoke(
+            {
+                "job_id": job_id,
+                "template_id": template_id,
+                "resume_text": resume_text,
+                "resume_object_key": resume_object_key,
+                "raw_resume_text": None,
+                "resume_summary": None,
+                "suggested_templates": [],
+                "manifest": None,
+                "resume_fact_fields": [],
+                "generated_fields": [],
+                "input_only_fields": [],
+                "recruiter_input_fields": [],
+                "ats_input_fields": [],
+                "resume_fact_result": {},
+                "generated_result": {},
+                "recruiter_input_result": {},
+                "ats_input_result": {},
+                "mapping_result": {},
+                "render_payload": {},
+                "extracted": {},
+                "filled_manifest": None,
+                "rendered_bytes": None,
+                "status": JobStatus.QUEUED,
+                "error": None,
+            }
+        )
 
-    return GraphResult(
-        status=result.get("status", JobStatus.FAILED),
-        data={
-            "job_id": job_id,
-            "template_id": result.get("template_id"),
-            "resume_text": result.get("raw_resume_text"),
-            "resume_object_key": result.get("resume_object_key"),
-            "resume_summary": result.get("resume_summary"),
-            "suggested_templates": result.get("suggested_templates", []),
-            "extracted": result.get("extracted", {}),
-            "filled_manifest": result.get("filled_manifest"),
-            "rendered_bytes": result.get("rendered_bytes"),
-        },
-        error=result.get("error"),
-    )
+        return GraphResult(
+            status=result.get("status", JobStatus.FAILED),
+            data={
+                "job_id": job_id,
+                "template_id": result.get("template_id"),
+                "resume_text": result.get("raw_resume_text"),
+                "resume_object_key": result.get("resume_object_key"),
+                "resume_summary": result.get("resume_summary"),
+                "suggested_templates": result.get("suggested_templates", []),
+                "extracted": result.get("extracted", {}),
+                "filled_manifest": result.get("filled_manifest"),
+                "rendered_bytes": result.get("rendered_bytes"),
+            },
+            error=result.get("error"),
+        )
+    finally:
+        active_job_id.reset(token)

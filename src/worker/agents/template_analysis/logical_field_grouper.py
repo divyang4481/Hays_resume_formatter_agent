@@ -10,6 +10,34 @@ MERGEFIELD_RE = re.compile(r"^MERGEFIELD\s+", re.I)
 CAMEL_TOKEN_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+")
 logger = logging.getLogger(__name__)
 
+_BID_RE = re.compile(r"^b_?(\d+)$", re.I)
+_TBL_BID_RE = re.compile(r"^tbl_(\d+)_r_(\d+)_c_(\d+)$", re.I)
+
+
+def _block_id_sort_key(block_id: str) -> tuple[int, int, int, int, str]:
+    bid = str(block_id or "").strip()
+    m_tbl = _TBL_BID_RE.match(bid)
+    if m_tbl:
+        return (0, int(m_tbl.group(1)), int(m_tbl.group(2)), int(m_tbl.group(3)), bid)
+
+    m_b = _BID_RE.match(bid)
+    if m_b:
+        return (1, int(m_b.group(1)), 0, 0, bid)
+
+    return (9, 10**9, 10**9, 10**9, bid)
+
+
+def _ordered_unique_block_ids(block_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for bid in block_ids:
+        sbid = str(bid or "").strip()
+        if not sbid or sbid in seen:
+            continue
+        seen.add(sbid)
+        deduped.append(sbid)
+    return sorted(deduped, key=_block_id_sort_key)
+
 
 def canonicalize_field_name(text: str) -> str:
     cleaned = MERGEFIELD_RE.sub("", (text or "").strip())
@@ -112,7 +140,7 @@ def _group_identical_candidates(fields: list[dict]) -> list[dict]:
         block_ids: list[str] = []
         for item in items:
             block_ids.extend(item.get("source_block_ids") or [])
-        f["source_block_ids"] = sorted(set(block_ids))
+        f["source_block_ids"] = _ordered_unique_block_ids(block_ids)
         f.setdefault("render_contract", {})
         f["render_contract"].setdefault("occurrence_selector", {})
         f["render_contract"]["occurrence_selector"].update(
@@ -206,7 +234,7 @@ def _build_repeat_section_field(section: str, fields: list[dict]) -> dict | None
         "field_type": "array_object",
         "template_token": extract_public_token(repeated[0]),
         "raw_token": repeated[0],
-        "source_block_ids": sorted(set(source_block_ids)),
+        "source_block_ids": _ordered_unique_block_ids(source_block_ids),
         "sub_fields": sub_fields,
         "template_evidence": {"section_heading": heading, "placeholder_tokens": repeated},
         "render_contract": {
@@ -263,7 +291,7 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
                 for f in sec_fields:
                     tok = str(f.get("template_token") or "")
                     sub_fields.append({"name": canonicalize_field_name(tok or f.get("name") or "field"), "field_type": "array" if _is_bullet_token(tok) else "scalar", "template_token": tok})
-                logical.append({"name": sec_name, "display_label": (section or region).upper(), "field_type": "array_object", "template_token": sub_fields[0]["template_token"] if sub_fields else "", "source_block_ids": sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])}), "sub_fields": sub_fields, "template_evidence": {"section_heading": (section or region).upper()}, "render_contract": {"render_strategy": "repeat_block", "anchor_token": sub_fields[0]["template_token"] if sub_fields else "", "block_tokens": {sf["name"]: sf["template_token"] for sf in sub_fields}}, "source_classification": "resume_fact"})
+                logical.append({"name": sec_name, "display_label": (section or region).upper(), "field_type": "array_object", "template_token": sub_fields[0]["template_token"] if sub_fields else "", "source_block_ids": _ordered_unique_block_ids([bid for f in sec_fields for bid in (f.get("source_block_ids") or [])]), "sub_fields": sub_fields, "template_evidence": {"section_heading": (section or region).upper()}, "render_contract": {"render_strategy": "repeat_block", "anchor_token": sub_fields[0]["template_token"] if sub_fields else "", "block_tokens": {sf["name"]: sf["template_token"] for sf in sub_fields}}, "source_classification": "resume_fact"})
                 continue
             # In label-value tables, repeated generic placeholders like [Type text]
             # can appear across distinct labels. Keep each row as a separate field.
@@ -276,7 +304,7 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
                 f0["field_type"] = "array" if _is_bullet_token(f0.get("template_token") or "") else f0.get("field_type", "scalar")
                 f0.setdefault("render_contract", {})["render_strategy"] = "bullet_list_replace" if f0["field_type"] == "array" else "placeholder_replace"
                 f0["name"] = canonicalize_field_name(section or region or f0.get("name") or "field")
-                f0["source_block_ids"] = sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])})
+                f0["source_block_ids"] = _ordered_unique_block_ids([bid for f in sec_fields for bid in (f.get("source_block_ids") or [])])
                 logical.append(f0)
                 continue
 
@@ -294,7 +322,7 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
             dedup[name] = field
             continue
         existing = dedup[name]
-        existing["source_block_ids"] = sorted(set((existing.get("source_block_ids") or []) + (field.get("source_block_ids") or [])))
+        existing["source_block_ids"] = _ordered_unique_block_ids((existing.get("source_block_ids") or []) + (field.get("source_block_ids") or []))
         if existing.get("field_type") != "array_object" and field.get("field_type") == "array_object":
             dedup[name] = field
 
@@ -331,7 +359,7 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
             "field_type": "array_object",
             "template_token": sub_fields[0]["template_token"],
             "raw_token": sub_fields[0]["raw_token"],
-            "source_block_ids": sorted(set(source_ids)),
+            "source_block_ids": _ordered_unique_block_ids(source_ids),
             "sub_fields": sub_fields,
             "template_evidence": {"section_heading": heading, "region_type": "mailmerge_table_region", "region_name": r_name},
             "render_contract": {"render_strategy": "mailmerge_table_region", "region_name": r_name, "block_tokens": block_tokens, "anchor_token": sub_fields[0]["template_token"]},
@@ -343,7 +371,40 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
         if region_lower in dedup and dedup[region_lower]["field_type"] == "array_object":
             continue # already handled by visual pipeline
 
-        members = [f for f in merged if str(f.get("raw_token") or "").upper().startswith("MERGEFIELD") and not str(f.get("raw_token") or "").upper().startswith("MERGEFIELD TABLE")]
+        marker_fields = table_regions.get(region, [])
+        marker_sections = {
+            str((mf.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+            for mf in marker_fields
+            if str((mf.get("template_evidence") or {}).get("section_heading") or "").strip()
+        }
+        marker_block_ids = {
+            str(bid)
+            for mf in marker_fields
+            for bid in (mf.get("source_block_ids") or [])
+            if str(bid).strip()
+        }
+
+        members = []
+        for f in merged:
+            raw_upper = str(f.get("raw_token") or "").upper()
+            if not raw_upper.startswith("MERGEFIELD") or raw_upper.startswith("MERGEFIELD TABLE"):
+                continue
+
+            ev = f.get("template_evidence") or {}
+            f_region = str(ev.get("region_name") or "").strip()
+            f_section = str(ev.get("section_heading") or "").strip().lower()
+            f_block_ids = {str(bid) for bid in (f.get("source_block_ids") or []) if str(bid).strip()}
+
+            # Fallback scope matching: exact region_name is preferred, then section and marker proximity.
+            if f_region and f_region == region:
+                members.append(f)
+                continue
+            if marker_sections and f_section in marker_sections:
+                members.append(f)
+                continue
+            if marker_block_ids and (marker_block_ids & f_block_ids):
+                members.append(f)
+
         if not members:
             continue
         sub_fields = []
@@ -361,7 +422,7 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
             "field_type": "array_object",
             "template_token": sub_fields[0]["template_token"],
             "raw_token": sub_fields[0]["raw_token"],
-            "source_block_ids": sorted(set(source_ids)),
+            "source_block_ids": _ordered_unique_block_ids(source_ids),
             "sub_fields": sub_fields,
             "template_evidence": {"section_heading": region},
             "render_contract": {"render_strategy": "mailmerge_table_region", "region_name": region, "block_tokens": block_tokens, "anchor_token": sub_fields[0]["template_token"]},

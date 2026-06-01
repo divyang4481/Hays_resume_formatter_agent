@@ -6,6 +6,7 @@ from typing import Any
 
 import boto3
 
+from src.shared.aws import get_boto3_session
 from src.shared.config import settings
 
 
@@ -38,8 +39,7 @@ class SQSQueueBus:
         self.recreate_client()
 
     def recreate_client(self) -> None:
-        profile = (settings.aws_profile or "").strip()
-        session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        session = get_boto3_session()
         self.client = session.client("sqs", region_name=settings.aws_region)
         self.template_analysis_url = settings.sqs_template_analysis_queue_url
         self.resume_format_url = settings.sqs_resume_format_queue_url

@@ -95,3 +95,30 @@ def test_select_template_endpoint():
     assert updated_job.status == JobStatus.QUEUED
     assert updated_job.template_id == template_id
 
+
+def test_template_version_incrementing():
+    # 1. Upload first template
+    file_payload1 = {"file": ("UK taxation.docx", b"dummy docx bytes", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    res1 = client.post("/admin/templates", files=file_payload1)
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert data1["version"] == 1
+    
+    # Verify in repo
+    tpl1 = repo.get_template(data1["template_id"])
+    assert tpl1["version"] == 1
+    assert tpl1["object_key"] == "templates/v1/UK taxation.docx"
+
+    # 2. Upload same template name again -> should auto increment to v2
+    file_payload2 = {"file": ("UK taxation.docx", b"dummy docx bytes 2", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    res2 = client.post("/admin/templates", files=file_payload2)
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["version"] == 2
+    
+    # Verify in repo
+    tpl2 = repo.get_template(data2["template_id"])
+    assert tpl2["version"] == 2
+    assert tpl2["object_key"] == "templates/v2/UK taxation.docx"
+
+

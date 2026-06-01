@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import contextvars
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -10,6 +11,8 @@ from sqlalchemy import create_engine, text
 
 from src.shared.config import settings
 from .models import JobStatus, JobStatusResponse, JobType
+
+active_job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_job_id", default=None)
 
 
 class InMemoryRepository:
@@ -29,8 +32,10 @@ class InMemoryRepository:
         input_tokens: int,
         output_tokens: int,
         latency_seconds: float,
+        job_id: str | None = None,
     ) -> str:
         call_id = str(uuid4())
+        effective_job_id = job_id or active_job_id.get()
         with self._lock:
             self.llm_calls.append({
                 "call_id": call_id,
@@ -40,19 +45,35 @@ class InMemoryRepository:
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "latency_seconds": latency_seconds,
+                "job_id": effective_job_id,
                 "created_at": datetime.now(timezone.utc),
             })
         return call_id
 
-    def create_template(self, *, template_name: str, object_key: str) -> tuple[str, int]:
+    def get_next_template_version(self, template_name: str) -> int:
+        with self._lock:
+            existing = [t for t in self.templates.values() if t["template_name"] == template_name]
+            return max([t["version"] for t in existing]) + 1 if existing else 1
+
+    def create_template(
+        self,
+        *,
+        template_name: str,
+        object_key: str,
+        version: int | None = None,
+    ) -> tuple[str, int]:
         with self._lock:
             template_id = str(uuid4())
+            if version is None:
+                existing = [t for t in self.templates.values() if t["template_name"] == template_name]
+                version = max([t["version"] for t in existing]) + 1 if existing else 1
+            
             self.templates[template_id] = {
                 "template_name": template_name,
                 "object_key": object_key,
-                "version": 1,
+                "version": version,
             }
-            return template_id, 1
+            return template_id, version
 
     def get_template(self, template_id: str) -> dict[str, Any] | None:
         tpl = self.templates.get(template_id)
@@ -114,6 +135,7 @@ class InMemoryRepository:
             resume_text=resume_text,
             resume_object_key=resume_object_key,
             resume_summary=None,
+            field_data_mapping=None,
         )
         with self._lock:
             self.jobs[job.job_id] = job
@@ -130,19 +152,21 @@ class InMemoryRepository:
         suggested_templates: list[dict] | None = None,
         extracted_data: dict[str, Any] | None = None,
         resume_summary: str | None = None,
+        field_data_mapping: dict[str, Any] | None = None,
     ) -> None:
         with self._lock:
             current = self.jobs[job_id]
             self.jobs[job_id] = current.model_copy(
                 update={
-                    "status": status,
-                    "updated_at": datetime.now(timezone.utc),
-                    "error": error,
-                    "output_object_key": output_object_key,
-                    "template_id": template_id if template_id is not None else current.template_id,
-                    "resume_summary": resume_summary if resume_summary is not None else current.resume_summary,
-                    "suggested_templates": suggested_templates if suggested_templates is not None else current.suggested_templates,
-                    "extracted_data": extracted_data if extracted_data is not None else current.extracted_data,
+                     "status": status,
+                     "updated_at": datetime.now(timezone.utc),
+                     "error": error,
+                     "output_object_key": output_object_key,
+                     "template_id": template_id if template_id is not None else current.template_id,
+                     "resume_summary": resume_summary if resume_summary is not None else current.resume_summary,
+                     "suggested_templates": suggested_templates if suggested_templates is not None else current.suggested_templates,
+                     "extracted_data": extracted_data if extracted_data is not None else current.extracted_data,
+                     "field_data_mapping": field_data_mapping if field_data_mapping is not None else current.field_data_mapping,
                 }
             )
 
@@ -206,7 +230,8 @@ class PostgresRepository:
             resume_object_key TEXT NULL,
             resume_summary TEXT NULL,
             suggested_templates JSONB NULL,
-            extracted_data JSONB NULL
+            extracted_data JSONB NULL,
+            field_data_mapping JSONB NULL
         );
 
         CREATE TABLE IF NOT EXISTS llm_calls (
@@ -223,10 +248,28 @@ class PostgresRepository:
         with self.engine.begin() as conn:
             conn.execute(text(ddl))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resume_summary TEXT NULL"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS field_data_mapping JSONB NULL"))
+            conn.execute(text("ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS job_id TEXT NULL"))
 
-    def create_template(self, *, template_name: str, object_key: str) -> tuple[str, int]:
+    def get_next_template_version(self, template_name: str) -> int:
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT MAX(version) FROM templates WHERE template_name = :template_name"),
+                {"template_name": template_name},
+            ).scalar()
+        return (row or 0) + 1
+
+    def create_template(
+        self,
+        *,
+        template_name: str,
+        object_key: str,
+        version: int | None = None,
+    ) -> tuple[str, int]:
         template_id = str(uuid4())
-        version = 1
+        if version is None:
+            version = self.get_next_template_version(template_name)
+            
         with self.engine.begin() as conn:
             conn.execute(
                 text(
@@ -325,13 +368,14 @@ class PostgresRepository:
             resume_text=resume_text,
             resume_object_key=resume_object_key,
             resume_summary=None,
+            field_data_mapping=None,
         )
         with self.engine.begin() as conn:
             conn.execute(
                 text(
                     """
-                    INSERT INTO jobs (job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data)
-                    VALUES (:job_id, :job_type, :status, :created_at, :updated_at, :error, :output_object_key, :template_id, :resume_text, :resume_object_key, :resume_summary, :suggested_templates, :extracted_data)
+                    INSERT INTO jobs (job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data, field_data_mapping)
+                    VALUES (:job_id, :job_type, :status, :created_at, :updated_at, :error, :output_object_key, :template_id, :resume_text, :resume_object_key, :resume_summary, :suggested_templates, :extracted_data, :field_data_mapping)
                     """
                 ),
                 {
@@ -348,6 +392,7 @@ class PostgresRepository:
                     "resume_summary": job.resume_summary,
                     "suggested_templates": json.dumps(job.suggested_templates) if job.suggested_templates else None,
                     "extracted_data": None,
+                    "field_data_mapping": None,
                 },
             )
         return job
@@ -363,10 +408,11 @@ class PostgresRepository:
         suggested_templates: list[dict] | None = None,
         extracted_data: dict[str, Any] | None = None,
         resume_summary: str | None = None,
+        field_data_mapping: dict[str, Any] | None = None,
     ) -> None:
         with self.engine.begin() as conn:
             row = conn.execute(
-                text("SELECT template_id, resume_summary, suggested_templates, extracted_data FROM jobs WHERE job_id = :job_id"),
+                text("SELECT template_id, resume_summary, suggested_templates, extracted_data, field_data_mapping FROM jobs WHERE job_id = :job_id"),
                 {"job_id": job_id}
             ).mappings().first()
             
@@ -374,6 +420,7 @@ class PostgresRepository:
             existing_resume_summary = row["resume_summary"] if row else None
             existing_suggested_templates = row["suggested_templates"] if row else None
             existing_extracted_data = row["extracted_data"] if row else None
+            existing_field_data_mapping = row["field_data_mapping"] if row else None
             
             final_template_id = template_id if template_id is not None else existing_template_id
             final_resume_summary = resume_summary if resume_summary is not None else existing_resume_summary
@@ -398,6 +445,16 @@ class PostgresRepository:
             else:
                 final_extracted_data = None
 
+            if field_data_mapping is not None:
+                final_field_data_mapping = json.dumps(field_data_mapping)
+            elif existing_field_data_mapping is not None:
+                if isinstance(existing_field_data_mapping, str):
+                    final_field_data_mapping = existing_field_data_mapping
+                else:
+                    final_field_data_mapping = json.dumps(existing_field_data_mapping)
+            else:
+                final_field_data_mapping = None
+
             conn.execute(
                 text(
                     """
@@ -409,7 +466,8 @@ class PostgresRepository:
                         template_id = :template_id,
                         resume_summary = :resume_summary,
                         suggested_templates = CAST(:suggested_templates AS JSONB),
-                        extracted_data = CAST(:extracted_data AS JSONB)
+                        extracted_data = CAST(:extracted_data AS JSONB),
+                        field_data_mapping = CAST(:field_data_mapping AS JSONB)
                     WHERE job_id = :job_id
                     """
                 ),
@@ -423,6 +481,7 @@ class PostgresRepository:
                     "resume_summary": final_resume_summary,
                     "suggested_templates": final_suggested_templates,
                     "extracted_data": final_extracted_data,
+                    "field_data_mapping": final_field_data_mapping,
                 },
             )
 
@@ -431,7 +490,7 @@ class PostgresRepository:
             row = conn.execute(
                 text(
                     """
-                    SELECT job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data
+                    SELECT job_id, job_type, status, created_at, updated_at, error, output_object_key, template_id, resume_text, resume_object_key, resume_summary, suggested_templates, extracted_data, field_data_mapping
                     FROM jobs WHERE job_id = :job_id
                     """
                 ),
@@ -456,6 +515,14 @@ class PostgresRepository:
         else:
             extracted_dict = None
 
+        fd_mapping = row["field_data_mapping"]
+        if isinstance(fd_mapping, str):
+            fd_mapping_dict = json.loads(fd_mapping)
+        elif fd_mapping is not None:
+            fd_mapping_dict = dict(fd_mapping)
+        else:
+            fd_mapping_dict = None
+
         return JobStatusResponse(
             job_id=row["job_id"],
             job_type=JobType(row["job_type"]),
@@ -470,6 +537,7 @@ class PostgresRepository:
             resume_summary=row.get("resume_summary"),
             suggested_templates=suggested_list,
             extracted_data=extracted_dict,
+            field_data_mapping=fd_mapping_dict,
         )
 
     def list_jobs(
@@ -524,6 +592,14 @@ class PostgresRepository:
             else:
                 extracted_dict = None
 
+            fd_mapping = row["field_data_mapping"]
+            if isinstance(fd_mapping, str):
+                fd_mapping_dict = json.loads(fd_mapping)
+            elif fd_mapping is not None:
+                fd_mapping_dict = dict(fd_mapping)
+            else:
+                fd_mapping_dict = None
+
             jobs.append(
                 JobStatusResponse(
                     job_id=row["job_id"],
@@ -539,6 +615,7 @@ class PostgresRepository:
                     resume_summary=row.get("resume_summary"),
                     suggested_templates=suggested_list,
                     extracted_data=extracted_dict,
+                    field_data_mapping=fd_mapping_dict,
                 )
             )
             
@@ -553,14 +630,16 @@ class PostgresRepository:
         input_tokens: int,
         output_tokens: int,
         latency_seconds: float,
+        job_id: str | None = None,
     ) -> str:
         call_id = str(uuid4())
+        effective_job_id = job_id or active_job_id.get()
         with self.engine.begin() as conn:
             conn.execute(
                 text(
                     """
-                    INSERT INTO llm_calls (call_id, model_id, prompt_system, prompt_user, input_tokens, output_tokens, latency_seconds, created_at)
-                    VALUES (:call_id, :model_id, :prompt_system, :prompt_user, :input_tokens, :output_tokens, :latency_seconds, NOW())
+                    INSERT INTO llm_calls (call_id, model_id, prompt_system, prompt_user, input_tokens, output_tokens, latency_seconds, job_id, created_at)
+                    VALUES (:call_id, :model_id, :prompt_system, :prompt_user, :input_tokens, :output_tokens, :latency_seconds, :job_id, NOW())
                     """
                 ),
                 {
@@ -571,6 +650,7 @@ class PostgresRepository:
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "latency_seconds": latency_seconds,
+                    "job_id": effective_job_id,
                 },
             )
         return call_id

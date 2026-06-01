@@ -9,6 +9,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from src.shared.aws import get_boto3_session
 from src.shared.config import settings
 from src.worker.core.prompt_manager import PromptManager
 
@@ -25,8 +26,7 @@ class LLMClient:
             retries={"max_attempts": settings.bedrock_max_retries, "mode": "standard"},
         )
 
-        profile = (settings.aws_profile or "").strip()
-        session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        session = get_boto3_session()
         self._bedrock_runtime = session.client("bedrock-runtime", region_name=settings.aws_region, config=botocore_cfg)
         self._bedrock_agent_runtime = session.client("bedrock-agent-runtime", region_name=settings.aws_region, config=botocore_cfg)
         self.bedrock_agent_id = settings.bedrock_agent_id
@@ -214,6 +214,7 @@ class LLMClient:
         use_strong_model: bool = True,
     ) -> dict[str, Any]:
         model = self.strong_model if use_strong_model else self.fast_model
+        from src.worker.agents.template_analysis.logical_field_grouper import infer_source_classification
         
         from src.worker.core.llm_call_manager import llm_call_manager
         import re
@@ -222,13 +223,17 @@ class LLMClient:
         for c in field_candidates:
             candidates_input.append({
                 "candidate_id": c.get("candidate_id"),
+                "name": c.get("name"),
                 "suggested_name": c.get("suggested_name"),
                 "display_label": c.get("display_label"),
                 "field_type": c.get("field_type", "scalar"),
                 "template_token": c.get("template_token"),
+                "raw_token": c.get("raw_token"),
                 "source_block_ids": c.get("source_block_ids", []),
+                "sub_fields": c.get("sub_fields", []),
                 "template_evidence": c.get("template_evidence", {}),
                 "render_contract": c.get("render_contract", {}),
+                "source_classification": c.get("source_classification"),
             })
             
         try:
@@ -239,6 +244,7 @@ class LLMClient:
                 context={
                     "template_name": template_name,
                     "candidates_json": json.dumps(candidates_input, ensure_ascii=True),
+                    "repeat_groups_json": json.dumps(repeat_groups, ensure_ascii=True),
                 },
                 model=model,
                 max_tokens=settings.bedrock_max_output_tokens_template_analysis,
@@ -255,20 +261,66 @@ class LLMClient:
             payload = json.loads(cleaned_text)
             fields = payload.get("fields", [])
             if isinstance(fields, list):
-                # Ensure all required fields have their render_contract and source_block_ids preserved
-                # from the original candidate matching by name/token if missing
-                candidate_map = {c["suggested_name"]: c for c in candidates_input}
+                def _candidate_match_score(field: dict[str, Any], candidate: dict[str, Any]) -> int:
+                    score = 0
+                    field_name = str(field.get("name") or "").strip().lower()
+                    candidate_names = {
+                        str(candidate.get("name") or "").strip().lower(),
+                        str(candidate.get("suggested_name") or "").strip().lower(),
+                    }
+                    candidate_names.discard("")
+                    if field_name and field_name in candidate_names:
+                        score += 5
+
+                    field_ids = {str(x) for x in (field.get("source_block_ids") or []) if str(x)}
+                    candidate_ids = {str(x) for x in (candidate.get("source_block_ids") or []) if str(x)}
+                    if field_ids and candidate_ids:
+                        overlap = len(field_ids & candidate_ids)
+                        if overlap:
+                            score += 10 + overlap
+
+                    field_token = str(field.get("template_token") or "").strip().lower()
+                    candidate_token = str(candidate.get("template_token") or "").strip().lower()
+                    if field_token and candidate_token and field_token == candidate_token:
+                        score += 4
+
+                    field_section = str((field.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+                    candidate_section = str((candidate.get("template_evidence") or {}).get("section_heading") or "").strip().lower()
+                    if field_section and candidate_section and field_section == candidate_section:
+                        score += 2
+
+                    field_render = str((field.get("render_contract") or {}).get("render_strategy") or "").strip().lower()
+                    candidate_render = str((candidate.get("render_contract") or {}).get("render_strategy") or "").strip().lower()
+                    if field_render and candidate_render and field_render == candidate_render:
+                        score += 2
+
+                    return score
+
+                def _best_candidate(field: dict[str, Any]) -> dict[str, Any] | None:
+                    scored = [(_candidate_match_score(field, candidate), candidate) for candidate in candidates_input]
+                    scored = [item for item in scored if item[0] > 0]
+                    if not scored:
+                        return None
+                    scored.sort(key=lambda item: item[0], reverse=True)
+                    return scored[0][1]
+
                 for f in fields:
-                    if "source_block_ids" not in f or not f["source_block_ids"]:
-                        orig = candidate_map.get(f["name"])
-                        if orig:
+                    orig = _best_candidate(f)
+                    if orig:
+                        if str(orig.get("name") or "").strip():
+                            f["name"] = orig.get("name")
+                        if "source_block_ids" not in f or not f["source_block_ids"]:
                             f["source_block_ids"] = orig.get("source_block_ids", [])
-                            f["template_token"] = f.get("template_token") or orig.get("template_token")
-                            f["template_evidence"] = f.get("template_evidence") or orig.get("template_evidence")
-                            f["render_contract"] = f.get("render_contract") or orig.get("render_contract")
-                    
-                    if "source_classification" not in f:
-                        f["source_classification"] = "recruiter_input"
+                        f["template_token"] = f.get("template_token") or orig.get("template_token")
+                        if not f.get("template_evidence"):
+                            f["template_evidence"] = orig.get("template_evidence")
+                        if not f.get("render_contract"):
+                            f["render_contract"] = orig.get("render_contract")
+                        if f.get("field_type") == "array_object" and orig.get("sub_fields"):
+                            f["sub_fields"] = orig.get("sub_fields", [])
+
+                    if "source_classification" not in f or not str(f.get("source_classification") or "").strip():
+                        f["source_classification"] = infer_source_classification(f)
                 return {"fields": fields}
         except Exception as e:
             print(f"[PlanManifest] LLM planning failed: {e}. Using deterministic programmatic planner fallback.")

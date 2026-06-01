@@ -13,5 +13,5 @@ Rules for Layout Planning:
    - Determine which visual section heading each placeholder belongs to (e.g. `[Job description, Date]` belongs under "Work Experience").
 3. **Map Special Merge Fields & Target Fields**:
    - Identify consultant or presentation details (like `CVcomments` representing "Our expert opinion").
-   - Explicitly map candidate fields like "Position Required" to `position_required` (which represents the position for which the candidate is considered or applied).
+   - Normalize candidate-facing labels into descriptive snake_case keys derived from section context and label meaning.
 4. **Produce a detailed text analysis** outlining every discovered section, its type (scalar details, repeating table, bullet list), the placeholders belonging inside it, and their expected contextual name.
