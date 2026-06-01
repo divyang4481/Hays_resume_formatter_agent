@@ -4,6 +4,7 @@ import time
 import json
 from typing import Any
 from src.shared.repository import repo
+from src.shared.config import settings
 from src.worker.core.prompt_manager import PromptManager
 
 
@@ -13,6 +14,12 @@ class LLMCallManager:
 
     def estimate_tokens(self, text: str) -> int:
         return max(1, len(text) // 4)
+
+    def _truncate_for_log(self, text: str) -> str:
+        limit = max(1000, int(settings.llm_log_prompt_chars))
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}\n...[truncated {len(text) - limit} chars]"
 
     def execute_call(
         self,
@@ -44,6 +51,17 @@ class LLMCallManager:
             max_tokens=max_tokens,
             temperature=temperature,
         )
+
+        if settings.llm_log_prompts:
+            print("\n[LLMCallManager] ===== LLM PROMPT START =====")
+            print(f"[LLMCallManager] namespace={namespace} model={model} temp={temperature} max_tokens={max_tokens}")
+            print("[LLMCallManager] --- SYSTEM PROMPT ---")
+            print(self._truncate_for_log(system_prompt))
+            print("[LLMCallManager] --- USER PROMPT ---")
+            print(self._truncate_for_log(user_prompt))
+            print("[LLMCallManager] --- MODEL RESPONSE ---")
+            print(self._truncate_for_log(text))
+            print("[LLMCallManager] ===== LLM PROMPT END =====\n")
 
         latency = time.time() - start_time
 

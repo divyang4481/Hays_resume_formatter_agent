@@ -7,6 +7,8 @@ Field handling rules:
 - For scalar fields, return a short string value.
 - For array fields, return a list of short strings.
 - For array_object fields, return a list of objects, one object per real resume entry.
+- Return every field present in the manifest exactly once in output under "extracted".
+- Never omit a field key, even when evidence is weak or missing.
 - Do not collapse array_object fields into a single string.
 - Do not skip repeatable sections such as work experience or education when evidence is present.
 - Preserve the structure implied by sub_fields in the manifest.
@@ -14,6 +16,15 @@ Field handling rules:
 For work experience style fields, extract each role with dates, organisation, and responsibilities where available.
 
 Keep all extracted text and bullet points extremely concise and summarized (max 10 words per bullet point/string). Do not copy long sentences verbatim; summarize key facts only to stay under the token limit.
+
+Missing evidence rules:
+- If evidence is missing for a scalar field, return "".
+- If evidence is missing for an array field, return [].
+- If evidence is missing for an array_object field, return [].
+
+Qualification field rules:
+- For qualification/certification/accreditation/license fields, extract actual credential names from the resume.
+- Do not return only heading words such as "Certification", "Certifications", or "Professional qualifications" when credential entries are present.
 
 Few-shot examples:
 
@@ -36,3 +47,8 @@ Example 4 - no safe evidence
 Input field: {"name":"notice_period","field_type":"scalar"}
 Resume evidence: none
 Output: {"extracted":{"notice_period":""}}
+
+Example 5 - professional qualifications (array_object)
+Input field: {"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]}
+Resume evidence: "Certification: AWS Certified Solutions Architect; Microsoft Certified: Azure AI Engineer Associate"
+Output: {"extracted":{"professional_qualifications":[{"check_type":"AWS Certified Solutions Architect"},{"check_type":"Microsoft Certified: Azure AI Engineer Associate"}]}}

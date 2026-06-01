@@ -11,6 +11,8 @@ Map resume data to the manifest fields below.
 ```
 
 Instructions:
+- Each field may include a search_hint; use it to locate likely resume sections/phrases before extracting values.
+- Prioritize evidence near headings or terms referenced by search_hint, then validate with nearby text.
 - If a field has field_type "array_object", extract all visible entries from the resume into a JSON array of objects.
 - Use the sub_fields in each array_object field as the object keys.
 - For work experience fields, each array item should represent one role or employment entry.

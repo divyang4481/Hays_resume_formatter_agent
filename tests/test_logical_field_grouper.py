@@ -53,3 +53,38 @@ def test_keeps_interests_as_array():
     interests=find_field(out,"interests")
     assert interests["field_type"] == "array"
     assert interests["template_token"] == "[Bullet point list]"
+
+
+def test_does_not_collapse_distinct_labels_with_same_token_in_one_section():
+    fields = [
+        {
+            "name": None,
+            "display_label": "Current salary & benefits",
+            "field_type": "scalar",
+            "template_token": "[Type text]",
+            "source_block_ids": ["tbl_000_r_004_c_001"],
+            "template_evidence": {
+                "section_heading": "CANDIDATE PROFILE",
+                "label_text": "Current salary & benefits",
+                "region_type": "label_value_table",
+            },
+        },
+        {
+            "name": None,
+            "display_label": "Professional qualifications",
+            "field_type": "scalar",
+            "template_token": "[Type text]",
+            "source_block_ids": ["tbl_000_r_007_c_001"],
+            "template_evidence": {
+                "section_heading": "CANDIDATE PROFILE",
+                "label_text": "Professional qualifications",
+                "region_type": "label_value_table",
+            },
+        },
+    ]
+
+    out = group_logical_fields_from_candidates(fields, {})
+    names = {f["name"] for f in out}
+
+    assert "current_salary_benefits" in names
+    assert "professional_qualifications" in names

@@ -39,6 +39,100 @@ class LLMClient:
             "text": text,
         }
 
+    def _compose_field_search_hint(self, field: dict[str, Any]) -> str:
+        """Create a generic search hint from manifest metadata without field-specific rules."""
+        candidates: list[str] = []
+
+        for key in ("display_label", "source_hint", "template_token", "formatting_hint"):
+            value = field.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+
+        aliases = field.get("aliases")
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if isinstance(alias, str) and alias.strip():
+                    candidates.append(alias.strip())
+
+        extraction_contract = field.get("extraction_contract")
+        if isinstance(extraction_contract, dict):
+            mapping_hint = extraction_contract.get("mapping_hint")
+            if isinstance(mapping_hint, str) and mapping_hint.strip():
+                candidates.append(mapping_hint.strip())
+
+        semantic_contract = field.get("semantic_contract")
+        if isinstance(semantic_contract, dict):
+            search_intent = semantic_contract.get("resume_search_intent")
+            if isinstance(search_intent, str) and search_intent.strip():
+                candidates.append(search_intent.strip())
+
+        template_evidence = field.get("template_evidence")
+        if isinstance(template_evidence, dict):
+            for key in ("section_heading", "region_name", "region_type"):
+                value = template_evidence.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidates.append(value.strip())
+
+        render_contract = field.get("render_contract")
+        if isinstance(render_contract, dict):
+            anchor_token = render_contract.get("anchor_token")
+            if isinstance(anchor_token, str) and anchor_token.strip():
+                candidates.append(anchor_token.strip())
+
+            block_tokens = render_contract.get("block_tokens")
+            if isinstance(block_tokens, dict):
+                for token in block_tokens.values():
+                    if isinstance(token, str) and token.strip():
+                        candidates.append(token.strip())
+
+        sub_fields = field.get("sub_fields")
+        if isinstance(sub_fields, list):
+            for sub in sub_fields:
+                if not isinstance(sub, dict):
+                    continue
+                sub_name = sub.get("name")
+                if isinstance(sub_name, str) and sub_name.strip():
+                    candidates.append(sub_name.strip())
+                sub_token = sub.get("template_token")
+                if isinstance(sub_token, str) and sub_token.strip():
+                    candidates.append(sub_token.strip())
+
+        # Add generic resume heading synonyms for semantic families inferred from field metadata.
+        semantic_probe = " ".join(
+            str(field.get(k) or "") for k in ("name", "display_label", "source_hint")
+        ).lower()
+        if any(term in semantic_probe for term in ("qualif", "certif", "accredit", "license", "licence")):
+            candidates.extend([
+                "Certification",
+                "Certifications",
+                "Certificate",
+                "Professional qualifications",
+                "Licenses",
+                "Accreditations",
+            ])
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            key = re.sub(r"\s+", " ", item).strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(item)
+
+        return " | ".join(unique[:10])
+
+    def _enrich_fields_for_resume_extraction(self, fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        enriched: list[dict[str, Any]] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            cloned = dict(field)
+            existing_hint = cloned.get("search_hint")
+            if not (isinstance(existing_hint, str) and existing_hint.strip()):
+                cloned["search_hint"] = self._compose_field_search_hint(cloned)
+            enriched.append(cloned)
+        return enriched
+
     def infer_template_fields(
         self,
         *,
@@ -193,13 +287,14 @@ class LLMClient:
         use_strong_model: bool = False,
     ) -> dict[str, Any]:
         model = self.strong_model if use_strong_model else self.fast_model
+        enriched_fields = self._enrich_fields_for_resume_extraction(fields)
 
         from src.worker.core.llm_call_manager import llm_call_manager
         text = llm_call_manager.execute_call(
             llm_client=self,
             namespace="resume_extraction",
             context={
-                "fields_json": json.dumps(fields, ensure_ascii=True),
+                "fields_json": json.dumps(enriched_fields, ensure_ascii=True),
                 "resume_text": resume_text,
             },
             model=model,

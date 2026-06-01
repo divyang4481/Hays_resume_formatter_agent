@@ -14,7 +14,7 @@
 </head>
 <body class="dark-theme">
     <!-- Premium Backdrop Glows -->
-    <div class="glow-bg glow-purple"></div>
+    <div class="glow-bg glow-navy"></div>
     <div class="glow-bg glow-cyan"></div>
 
     <div class="app-container">
@@ -145,6 +145,36 @@
                         </div>
                     </div>
 
+                    <!-- AI Candidate Profile Card Panel -->
+                    <div class="candidate-card hidden" id="pipeline-candidate-card">
+                        <div class="candidate-card-header">
+                            <div class="candidate-avatar">
+                                <i class="fa-solid fa-user-tie"></i>
+                            </div>
+                            <div class="candidate-identity">
+                                <div class="candidate-name-row">
+                                    <h4 id="candidate-card-name">Candidate Profile</h4>
+                                    <span class="badge badge-hays" id="candidate-status-badge">AI-Analyzed</span>
+                                </div>
+                                <div class="candidate-sub-row">
+                                    <span id="candidate-card-location"><i class="fa-solid fa-location-dot"></i> Unknown Location</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="candidate-card-body">
+                            <div class="summary-section">
+                                <h5><i class="fa-solid fa-file-invoice"></i> Professional Summary</h5>
+                                <p id="candidate-card-summary">Extracting candidate summary...</p>
+                            </div>
+                            <div class="skills-section">
+                                <h5><i class="fa-solid fa-brain"></i> Core Expertise</h5>
+                                <div class="skills-tags" id="candidate-card-skills">
+                                    <!-- Rendered dynamically -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Progress Details / Error logs -->
                     <div class="pipeline-details">
                         <div class="status-indicator">
@@ -152,21 +182,22 @@
                             <span class="status-msg" id="status-message">Agent is reading resume and matching variables...</span>
                         </div>
 
-                        <!-- Interactive Template Selection (When job is waiting for selection) -->
+                        <!-- Interactive Template Recommendation Grid -->
                         <div class="selection-box hidden" id="selection-box">
                             <div class="selection-header">
-                                <h4><i class="fa-solid fa-wand-magic-sparkles"></i> Select Template to Continue</h4>
-                                <p>Please choose a corporate template to apply to the candidate's CV.</p>
+                                <h4><i class="fa-solid fa-wand-magic-sparkles"></i> AI-Recommended Formatting Templates</h4>
+                                <p>Our agent analyzed the CV and matched it with the templates below. Select one to proceed.</p>
                             </div>
-                            <div class="selection-body">
-                                <div class="selection-control">
-                                    <select id="pipeline-template-select" class="custom-select">
-                                        <option value="" disabled selected>-- Select a Template --</option>
-                                    </select>
-                                    <button id="btn-confirm-selection" class="btn btn-primary" onclick="confirmTemplateSelection()">
-                                        <i class="fa-solid fa-circle-check"></i> Confirm & Process
-                                    </button>
-                                </div>
+                            
+                            <div class="recommendations-container" id="recommendations-container">
+                                <!-- Dynamic clickable cards -->
+                            </div>
+
+                            <div class="selection-footer-controls">
+                                <input type="hidden" id="pipeline-template-select" value="">
+                                <button id="btn-confirm-selection" class="btn btn-primary btn-large" onclick="confirmTemplateSelection()" disabled>
+                                    <i class="fa-solid fa-circle-check"></i> Apply Selected Template & Continue
+                                </button>
                             </div>
                         </div>
 

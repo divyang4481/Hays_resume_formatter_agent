@@ -405,6 +405,52 @@ function updatePipelineUI(job) {
     const selectionBox = document.getElementById('selection-box');
     selectionBox.classList.add('hidden');
 
+    // Candidate Profile Card Display Logic
+    const candCard = document.getElementById('pipeline-candidate-card');
+    if (job.resume_summary) {
+        candCard.classList.remove('hidden');
+        document.getElementById('candidate-card-summary').textContent = job.resume_summary;
+
+        // Try to retrieve name, town, and skills from extracted_data if present
+        let candName = 'Candidate Profile';
+        let candLocation = 'Unknown Location';
+        let skillsHtml = '';
+
+        if (job.extracted_data) {
+            const data = job.extracted_data;
+            const nameKey = Object.keys(data).find(k => k.includes('name'));
+            if (nameKey && data[nameKey]) candName = data[nameKey];
+
+            const locKey = Object.keys(data).find(k => k.includes('town') || k.includes('city') || k.includes('location'));
+            if (locKey && data[locKey]) candLocation = data[locKey];
+
+            const skillsKey = Object.keys(data).find(k => k.includes('skills'));
+            if (skillsKey && data[skillsKey]) {
+                let skills = [];
+                const val = data[skillsKey];
+                if (typeof val === 'string') {
+                    skills = val.split(/[,;&]|\s{2,}/).map(s => s.trim()).filter(s => s.length > 0);
+                } else if (Array.isArray(val)) {
+                    skills = val;
+                }
+                skillsHtml = skills.slice(0, 10).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join('');
+            }
+        }
+
+        document.getElementById('candidate-card-name').textContent = candName;
+        document.getElementById('candidate-card-location').innerHTML = `<i class="fa-solid fa-location-dot"></i> ${escapeHtml(candLocation)}`;
+        
+        const skillsContainer = document.getElementById('candidate-card-skills');
+        if (skillsHtml) {
+            skillsContainer.innerHTML = skillsHtml;
+            skillsContainer.parentElement.classList.remove('hidden');
+        } else {
+            skillsContainer.parentElement.classList.add('hidden');
+        }
+    } else {
+        candCard.classList.add('hidden');
+    }
+
     if (job.status === 'queued') {
         sq.className = 'stage-node active';
         sp.className = 'stage-node';
@@ -428,14 +474,61 @@ function updatePipelineUI(job) {
         statusMsg.textContent = 'Paused: Please select a corporate template below to continue.';
         dot.className = 'status-dot pulsing';
 
-        // Populate and show the selection box
-        const select = document.getElementById('pipeline-template-select');
-        select.innerHTML = '<option value="" disabled selected>-- Select a Template --</option>';
+        // Render the recommended template cards grid
+        const recContainer = document.getElementById('recommendations-container');
+        recContainer.innerHTML = '';
 
-        // Load all available templates into the select dropdown
-        allTemplates.forEach(t => {
-            select.innerHTML += `<option value="${escapeHtml(t.template_id)}">${escapeHtml(t.template_name)} (v${escapeHtml(t.version)})</option>`;
-        });
+        const suggested = job.suggested_templates || [];
+        if (suggested.length === 0) {
+            // Render all templates from database as standard options
+            if (allTemplates.length === 0) {
+                recContainer.innerHTML = '<div class="loading-state text-warning"><i class="fa-solid fa-circle-info"></i><p>No formatting templates available. Please upload one in the Admin Area.</p></div>';
+            } else {
+                recContainer.innerHTML = allTemplates.map(tpl => {
+                    const fieldsCount = getManifestFields(tpl).length;
+                    return `
+                        <div class="recommendation-card" onclick="selectRecommendedTemplate(this, '${escapeHtml(tpl.template_id)}')">
+                            <div class="rec-header">
+                                <span class="rec-title">${escapeHtml(tpl.template_name)}</span>
+                                <span class="rec-score-badge rec-score-medium">Standard</span>
+                            </div>
+                            <p class="rec-reason">Hays standard formatting template. Fits most professional CV profiles.</p>
+                            <div class="rec-meta">
+                                <span><i class="fa-solid fa-list-check"></i> ${fieldsCount} fields</span>
+                                <span>· v${escapeHtml(tpl.version)}</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } else {
+            // Render AI recommended template cards
+            recContainer.innerHTML = suggested.map(rec => {
+                const foundTpl = allTemplates.find(t => t.template_id === rec.template_id);
+                const fieldsCount = foundTpl ? getManifestFields(foundTpl).length : 0;
+                const scoreClass = rec.match_score >= 80 ? 'rec-score-high' : 'rec-score-medium';
+                const scoreText = rec.match_score >= 80 ? 'Highly Match' : 'Match';
+                return `
+                    <div class="recommendation-card" onclick="selectRecommendedTemplate(this, '${escapeHtml(rec.template_id)}')">
+                        <div class="rec-header">
+                            <span class="rec-title">${escapeHtml(rec.template_name)}</span>
+                            <span class="rec-score-badge ${scoreClass}">
+                                <i class="fa-solid fa-fire"></i> ${rec.match_score}% ${scoreText}
+                            </span>
+                        </div>
+                        <p class="rec-reason">${escapeHtml(rec.reason)}</p>
+                        <div class="rec-meta">
+                            <span><i class="fa-solid fa-list-check"></i> ${fieldsCount} fields</span>
+                            <span>· ID: ${escapeHtml(rec.template_id.substring(0, 8))}...</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Reset selection hidden input and disable button
+        document.getElementById('pipeline-template-select').value = '';
+        document.getElementById('btn-confirm-selection').setAttribute('disabled', 'true');
 
         selectionBox.classList.remove('hidden');
     } else if (job.status === 'completed') {
@@ -452,9 +545,9 @@ function updatePipelineUI(job) {
         resultBox.classList.remove('hidden');
         document.getElementById('btn-download-resume').href = `${API_HOST}/jobs/${job.job_id}/download`;
 
-        // Display Extracted Variables table
+        // Display Extracted Variables table grouped by manifest classification
         if (job.extracted_data) {
-            displayExtractedFields(job.extracted_data);
+            displayExtractedFields(job.extracted_data, job.template_id);
         }
     } else if (job.status === 'failed') {
         sq.className = 'stage-node completed';
@@ -466,6 +559,20 @@ function updatePipelineUI(job) {
         statusMsg.innerHTML = `<span class="text-danger">Pipeline failed: ${job.error || 'Unknown rendering error'}</span>`;
     }
 }
+
+// Global selection handler for suggested template cards
+window.selectRecommendedTemplate = function(cardEl, templateId) {
+    document.querySelectorAll('.recommendation-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+    cardEl.classList.add('selected');
+    
+    const selectEl = document.getElementById('pipeline-template-select');
+    selectEl.value = templateId;
+    
+    const confirmBtn = document.getElementById('btn-confirm-selection');
+    confirmBtn.removeAttribute('disabled');
+};
 
 // Handler to resume job processing after selecting a template in the paused pipeline state
 async function confirmTemplateSelection() {
@@ -505,15 +612,49 @@ async function confirmTemplateSelection() {
     }
 }
 
-function displayExtractedFields(data) {
+function displayExtractedFields(data, templateId) {
     const viewer = document.getElementById('extracted-fields-viewer');
-    const tbody = document.getElementById('extracted-fields-body');
+    const container = document.getElementById('fields-grid-container');
 
     viewer.classList.remove('hidden');
-    tbody.innerHTML = '';
+    container.innerHTML = '';
 
+    // Find template manifest fields to map classification
+    let fieldClassMap = {};
+    if (templateId) {
+        const found = allTemplates.find(t => t.template_id === templateId);
+        if (found && found.manifest && Array.isArray(found.manifest.fields)) {
+            found.manifest.fields.forEach(f => {
+                fieldClassMap[f.name] = f.source_classification || 'resume_fact';
+            });
+        }
+    }
+
+    // Grouping buckets
+    const groups = {
+        'resume_fact': {
+            title: 'Verifiable Resume Facts',
+            icon: 'fa-solid fa-file-invoice',
+            badgeClass: 'rec-score-high',
+            fields: []
+        },
+        'generated': {
+            title: 'AI Generated Insights',
+            icon: 'fa-solid fa-wand-magic-sparkles',
+            badgeClass: 'badge-hays',
+            fields: []
+        },
+        'input_only': {
+            title: 'Input & ATS Overrides',
+            icon: 'fa-solid fa-sliders',
+            badgeClass: 'rec-score-medium',
+            fields: []
+        }
+    };
+
+    // Distribute data keys
     Object.keys(data).forEach(key => {
-        let val = data[key];
+        const val = data[key];
         let valStr = '';
         let typeStr = 'Scalar';
 
@@ -527,15 +668,64 @@ function displayExtractedFields(data) {
             valStr = val !== null && val !== undefined ? escapeHtml(String(val)) : '<span class="text-muted">empty</span>';
         }
 
-        tbody.innerHTML += `
+        let classification = fieldClassMap[key] || 'resume_fact';
+        if (classification === 'recruiter_input' || classification === 'ats_input') {
+            classification = 'input_only';
+        }
+        if (!groups[classification]) {
+            classification = 'resume_fact';
+        }
+
+        groups[classification].fields.push({
+            name: key,
+            type: typeStr,
+            value: valStr
+        });
+    });
+
+    // Render grouped cards
+    let groupHtml = '';
+    Object.keys(groups).forEach(gKey => {
+        const grp = groups[gKey];
+        if (grp.fields.length === 0) return;
+
+        const rowsHtml = grp.fields.map(f => `
             <tr>
-                <td><strong>${escapeHtml(key)}</strong></td>
-                <td><span class="badge">${typeStr}</span></td>
-                <td>${valStr}</td>
+                <td style="width: 25%;"><strong>${escapeHtml(f.name)}</strong></td>
+                <td style="width: 15%;"><span class="badge">${escapeHtml(f.type)}</span></td>
+                <td>${f.value}</td>
             </tr>
+        `).join('');
+
+        groupHtml += `
+            <div class="extracted-group-card animate-slide-down">
+                <div class="extracted-group-header">
+                    <span class="extracted-group-title">
+                        <i class="${grp.icon}"></i> ${escapeHtml(grp.title)}
+                    </span>
+                    <span class="extracted-group-badge ${grp.badgeClass}">${grp.fields.length} variables</span>
+                </div>
+                <div class="table-container">
+                    <table class="custom-table compact">
+                        <thead>
+                            <tr>
+                                <th>Field Name</th>
+                                <th>Type</th>
+                                <th>Extracted Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         `;
     });
+
+    container.innerHTML = groupHtml;
 }
+
 
 function toggleExtractedFields() {
     const container = document.getElementById('fields-grid-container');

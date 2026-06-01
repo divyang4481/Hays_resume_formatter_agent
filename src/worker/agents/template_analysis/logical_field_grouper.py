@@ -93,9 +93,16 @@ def _group_identical_candidates(fields: list[dict]) -> list[dict]:
     buckets: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for field in fields:
         evidence = field.get("template_evidence") or {}
+        candidate_identity = (
+            field.get("name")
+            or field.get("suggested_name")
+            or field.get("display_label")
+            or (evidence.get("label_text") if isinstance(evidence, dict) else "")
+            or ""
+        )
         buckets[(
             (evidence.get("section_heading") or "").strip().lower(),
-            canonicalize_field_name(field.get("name") or field.get("suggested_name") or ""),
+            canonicalize_field_name(str(candidate_identity)),
             str(field.get("template_token") or ""),
         )].append(field)
 
@@ -257,6 +264,11 @@ def group_logical_fields_from_candidates(fields: list[dict], layout: dict) -> li
                     tok = str(f.get("template_token") or "")
                     sub_fields.append({"name": canonicalize_field_name(tok or f.get("name") or "field"), "field_type": "array" if _is_bullet_token(tok) else "scalar", "template_token": tok})
                 logical.append({"name": sec_name, "display_label": (section or region).upper(), "field_type": "array_object", "template_token": sub_fields[0]["template_token"] if sub_fields else "", "source_block_ids": sorted({bid for f in sec_fields for bid in (f.get("source_block_ids") or [])}), "sub_fields": sub_fields, "template_evidence": {"section_heading": (section or region).upper()}, "render_contract": {"render_strategy": "repeat_block", "anchor_token": sub_fields[0]["template_token"] if sub_fields else "", "block_tokens": {sf["name"]: sf["template_token"] for sf in sub_fields}}, "source_classification": "resume_fact"})
+                continue
+            # In label-value tables, repeated generic placeholders like [Type text]
+            # can appear across distinct labels. Keep each row as a separate field.
+            if region == "label_value_table":
+                logical.extend(sec_fields)
                 continue
             token_counts = Counter(str(f.get("template_token") or "") for f in sec_fields)
             if len(token_counts) == 1:

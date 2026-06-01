@@ -40,6 +40,10 @@ class ResumeFormatState(TypedDict):
     error: str | None
 
 
+def _is_empty_mapped_value(value: Any) -> bool:
+    return value in (None, "", [])
+
+
 # ---------------------------------------------------------------------------
 # Graph nodes
 # ---------------------------------------------------------------------------
@@ -183,10 +187,40 @@ def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
             "candidate_email": {"value": next((x for x in lines if "@" in x), "")},
         }}
 
+    field_mappings = extracted.setdefault("field_mappings", {})
+
+    # Retry only missing fields in a focused second pass to reduce omissions.
+    missing_fields = [
+        f for f in fields
+        if _is_empty_mapped_value((field_mappings.get(f.get("name", ""), {}) or {}).get("value"))
+    ]
+    if missing_fields:
+        print(f"[ExtractData] Retrying focused extraction for {len(missing_fields)} missing resume_fact fields")
+        try:
+            retry_payload = agentic_core.extract_resume_fields(
+                fields=missing_fields,
+                resume_text=raw_text,
+                use_strong_model=True,
+            )
+            retry_mappings = (retry_payload or {}).get("field_mappings", {}) or {}
+            recovered = 0
+            for field in missing_fields:
+                name = field.get("name")
+                if not name:
+                    continue
+                retry_entry = retry_mappings.get(name) or {}
+                retry_value = retry_entry.get("value")
+                if _is_empty_mapped_value(retry_value):
+                    continue
+                field_mappings[name] = retry_entry
+                recovered += 1
+            print(f"[ExtractData] Focused retry recovered {recovered} fields")
+        except Exception as e:
+            print(f"[ExtractData] Focused retry failed ({e})")
+
     state["resume_fact_result"] = extracted
     
     # Ensure candidate_own_cv is populated with the original resume text
-    field_mappings = extracted.setdefault("field_mappings", {})
     if "candidate_own_cv" in [f.get("name") for f in (state.get("manifest") or {}).get("fields", [])]:
         if "candidate_own_cv" not in field_mappings or field_mappings["candidate_own_cv"].get("value") is None:
             field_mappings["candidate_own_cv"] = {
