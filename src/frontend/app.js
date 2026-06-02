@@ -266,7 +266,7 @@ async function loadTemplates() {
         const res = await fetch(`${API_HOST}/templates?limit=100`);
         if (!res.ok) throw new Error("Failed to load templates");
         const data = await res.json();
-        allTemplates = data.templates;
+        allTemplates = sortTemplatesLatestFirst(data.templates);
         renderAgentTemplates();
     } catch (err) {
         console.error(err);
@@ -883,7 +883,7 @@ async function loadAdminTemplates(showLoading = true) {
         const res = await fetch(`${API_HOST}/templates?limit=100`);
         if (!res.ok) throw new Error("Failed to load templates");
         const data = await res.json();
-        allTemplates = data.templates || [];
+        allTemplates = sortTemplatesLatestFirst(data.templates || []);
         renderAdminTemplateSummary(summary);
         renderAdminTemplateList(list);
     } catch (err) {
@@ -937,6 +937,9 @@ function renderAdminTemplateList(list) {
                 </div>
                 <div class="admin-item-actions">
                     <span class="badge"><i class="fa-solid fa-list-check"></i> ${fields.length} fields</span>
+                    <button class="btn btn-outline btn-small" onclick="showRawManifestJSON('${escapeHtml(tpl.template_id)}')">
+                        <i class="fa-solid fa-code"></i> Show Raw Manifest
+                    </button>
                     <button class="btn btn-primary btn-small" onclick="inspectManifest('${escapeHtml(tpl.template_id)}')">
                         <i class="fa-solid fa-pen-to-square"></i> Edit / Details
                     </button>
@@ -1008,15 +1011,29 @@ function renderAdminResumeJobs(tbody) {
         return;
     }
 
+    // Sort descending by created_at or updated_at so that latest templates/jobs come first
+    resumeJobs.sort((a, b) => new Date(b.created_at || b.updated_at) - new Date(a.created_at || a.updated_at));
+
     tbody.innerHTML = resumeJobs.map(job => {
         const cls = getStatusClass(job.status);
         const icon = getStatusIcon(job.status);
         const source = job.resume_object_key ? job.resume_object_key.split('/').pop() : 'Pasted Raw Text';
         const templateName = getTemplateNameById(job.template_id);
         const output = job.output_object_key ? job.output_object_key.split('/').pop() : 'Not available yet';
-        const action = job.status === 'completed'
-            ? `<a href="${API_HOST}/jobs/${escapeHtml(job.job_id)}/download" class="btn btn-success btn-small"><i class="fa-solid fa-download"></i> Download</a>`
-            : `<button class="btn btn-outline btn-small" onclick="trackExistingJobFromAdmin('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-eye"></i> Track</button>`;
+
+        const actionButtons = [];
+        if (job.template_id) {
+            actionButtons.push(`<button class="btn btn-outline btn-small" onclick="showRawManifestJSON('${escapeHtml(job.template_id)}')"><i class="fa-solid fa-code"></i> Manifest</button>`);
+        }
+        actionButtons.push(`<button class="btn btn-outline btn-small" onclick="showJobDataMapping('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-sitemap"></i> Data Mapping</button>`);
+        
+        if (job.status === 'completed') {
+            actionButtons.push(`<a href="${API_HOST}/jobs/${escapeHtml(job.job_id)}/download" class="btn btn-success btn-small"><i class="fa-solid fa-download"></i> Download</a>`);
+        } else {
+            actionButtons.push(`<button class="btn btn-outline btn-small" onclick="trackExistingJobFromAdmin('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-eye"></i> Track</button>`);
+        }
+
+        const action = `<div class="job-action-group">${actionButtons.join('')}</div>`;
 
         return `
             <tr>
@@ -1155,16 +1172,14 @@ async function inspectManifest(templateId) {
 
         const tbody = document.getElementById('modal-fields-body');
         if (fields.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No manifest fields detected for this template. Check analysis worker log.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">No manifest fields detected for this template. Check analysis worker log.</td></tr>`;
         } else {
             tbody.innerHTML = fields.map(f => `
                 <tr>
                     <td><strong>${escapeHtml(f.name)}</strong></td>
                     <td><span class="badge">${escapeHtml(f.field_type)}</span></td>
-                    <td>${f.required ? '<span class="text-warning">Required</span>' : '<span class="text-muted">Optional</span>'}</td>
                     <td><code>${escapeHtml(f.template_token)}</code></td>
                     <td><span class="badge badge-source-hint">${escapeHtml(getSourceClassificationLabel(f.source_classification || '-'))}</span></td>
-                    <td><span class="subtitle">${escapeHtml(f.source_hint || '-')}</span></td>
                 </tr>
             `).join('');
         }
@@ -1202,3 +1217,65 @@ function toggleRawManifest() {
 function closeManifestModal() {
     document.getElementById('manifest-modal').classList.add('hidden');
 }
+
+function sortTemplatesLatestFirst(templates) {
+    if (!Array.isArray(templates)) return [];
+    return templates.sort((a, b) => {
+        const dateA = a.manifest?.created_at ? new Date(a.manifest.created_at) : new Date();
+        const dateB = b.manifest?.created_at ? new Date(b.manifest.created_at) : new Date();
+        return dateB - dateA;
+    });
+}
+
+let manifestCache = {};
+
+window.showRawManifestJSON = async function(templateId) {
+    if (!templateId) {
+        alert("No template selected for this job.");
+        return;
+    }
+    try {
+        let tpl;
+        if (manifestCache[templateId]) {
+            tpl = manifestCache[templateId];
+        } else {
+            const res = await fetch(`${API_HOST}/templates/${templateId}`);
+            if (!res.ok) throw new Error("Failed to load details");
+            tpl = await res.json();
+            manifestCache[templateId] = tpl;
+        }
+        const manifest = tpl.manifest || {};
+
+        document.getElementById('raw-manifest-title').textContent = `${tpl.template_name || 'Untitled template'} - Raw Manifest`;
+        document.getElementById('raw-manifest-meta').textContent = `Template ID: ${tpl.template_id} | Version: ${tpl.version}`;
+        document.getElementById('raw-manifest-content').textContent = JSON.stringify(manifest, null, 2);
+        document.getElementById('raw-manifest-modal').classList.remove('hidden');
+    } catch (err) {
+        alert("Error retrieving manifest details: " + err.message);
+    }
+};
+
+window.closeRawManifestModal = function(event) {
+    if (event && event.target && event.target.id !== 'raw-manifest-modal' && !event.target.closest('.btn-close')) {
+        return;
+    }
+    document.getElementById('raw-manifest-modal').classList.add('hidden');
+};
+
+window.showJobDataMapping = async function(jobId) {
+    if (!jobId) return;
+    try {
+        const res = await fetch(`${API_HOST}/jobs/${jobId}`);
+        if (!res.ok) throw new Error("Failed to fetch job details");
+        const job = await res.json();
+        
+        const dataToDisplay = job.field_data_mapping || job.extracted_data || { message: "No data mapping available for this job yet." };
+        
+        document.getElementById('recent-job-json-title').textContent = 'Job Data Mapping JSON';
+        document.getElementById('recent-job-json-meta').textContent = `Job ID: ${jobId} | Status: ${job.status}`;
+        document.getElementById('recent-job-json-content').textContent = JSON.stringify(dataToDisplay, null, 2);
+        document.getElementById('recent-job-json-modal').classList.remove('hidden');
+    } catch (err) {
+        alert("Error retrieving job data mapping: " + err.message);
+    }
+};

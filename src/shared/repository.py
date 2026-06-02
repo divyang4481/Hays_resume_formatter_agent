@@ -104,8 +104,21 @@ class InMemoryRepository:
                     "manifest": manifest,
                 })
             
-            # Sort by name
-            items.sort(key=lambda t: t["template_name"])
+            # Sort descending by manifest's created_at, fallback to current time for newly uploaded
+            def get_sort_key(t):
+                created_at = None
+                if t.get("manifest") and t["manifest"].get("created_at"):
+                    created_at = t["manifest"]["created_at"]
+                if isinstance(created_at, str):
+                    try:
+                        return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+                if isinstance(created_at, datetime):
+                    return created_at
+                return datetime.now(timezone.utc)
+
+            items.sort(key=get_sort_key, reverse=True)
             total = len(items)
             paginated = items[offset : offset + limit]
             return total, paginated
@@ -305,7 +318,7 @@ class PostgresRepository:
             SELECT t.template_id, t.template_name, t.object_key, t.version, m.manifest_json as manifest
             FROM templates t
             LEFT JOIN manifests m ON t.template_id = m.template_id
-            ORDER BY t.template_name ASC
+            ORDER BY COALESCE((m.manifest_json->>'created_at'), '9999-12-31T23:59:59Z') DESC, t.template_name ASC
             LIMIT :limit OFFSET :offset
         """
         count_query = "SELECT COUNT(*) FROM templates"

@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- FontAwesome for Premium Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="index.css?v=1.0.4">
 </head>
 <body class="light-theme">
     <!-- Premium Backdrop Glows -->
@@ -517,10 +517,8 @@
                                 <tr>
                                     <th>Field Variable Name</th>
                                     <th>Type</th>
-                                    <th>Required</th>
                                     <th>XML Token Match</th>
                                     <th>Data Source Hint</th>
-                                    <th>Source Context Hint</th>
                                 </tr>
                             </thead>
                             <tbody id="modal-fields-body">
@@ -554,7 +552,27 @@
         </div>
     </div>
 
+    <!-- Template Raw Manifest Modal -->
+    <div class="modal-backdrop hidden" id="raw-manifest-modal" onclick="closeRawManifestModal(event)">
+        <div class="glass-card modal-content animate-slide-up compact-json-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3 id="raw-manifest-title">Template Raw Manifest</h3>
+                    <span class="subtitle" id="raw-manifest-meta">Template ID: -</span>
+                </div>
+                <div class="modal-header-actions">
+                    <button class="btn-close" onclick="closeRawManifestModal()" title="Close raw manifest modal" aria-label="Close raw manifest modal">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <pre class="raw-manifest" id="raw-manifest-content">{}</pre>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript logic -->
-    <script src="app.js"></script>
+    <script src="app.js?v=1.0.4"></script>
 </body>
 </html>

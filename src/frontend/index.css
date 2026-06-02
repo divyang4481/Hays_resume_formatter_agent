@@ -1,9 +1,9 @@
 /* Core Variables & Design System - Hays Corporate Identity */
 :root {
-    --bg-primary: #f5f7fb;
+    --bg-primary: #ffffff;
     --bg-secondary: #ffffff;
-    --bg-glass: rgba(255, 255, 255, 0.88);
-    --border-glass: rgba(0, 48, 94, 0.10);
+    --bg-glass: rgba(255, 255, 255, 0.96);
+    --border-glass: rgba(0, 48, 94, 0.08);
 
     --color-primary: #00305e; /* Hays-inspired primary blue */
     --color-secondary: #0056b3; /* Supporting blue */
@@ -20,9 +20,9 @@
     --font-heading: 'Outfit', sans-serif;
     --font-body: 'Inter', sans-serif;
 
-    --shadow-premium: 0 18px 44px rgba(12, 33, 58, 0.10);
-    --shadow-glow-cyan: 0 0 40px rgba(29, 141, 184, 0.10);
-    --shadow-glow-blue: 0 0 40px rgba(0, 48, 94, 0.10);
+    --shadow-premium: 0 12px 30px rgba(12, 33, 58, 0.06);
+    --shadow-glow-cyan: 0 0 40px rgba(29, 141, 184, 0.05);
+    --shadow-glow-blue: 0 0 40px rgba(0, 48, 94, 0.05);
 
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     --radius-premium: 16px;
@@ -37,9 +37,9 @@
 
 body {
     background:
-        radial-gradient(circle at top left, rgba(0, 86, 179, 0.08), transparent 28%),
-        radial-gradient(circle at bottom right, rgba(29, 141, 184, 0.10), transparent 32%),
-        linear-gradient(180deg, #fbfcfe 0%, #f3f6fa 100%);
+        radial-gradient(circle at top left, rgba(0, 86, 179, 0.04), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(29, 141, 184, 0.04), transparent 30%),
+        #ffffff;
     color: var(--text-primary);
     font-family: var(--font-body);
     min-height: 100vh;
@@ -49,9 +49,9 @@ body {
 
 body.route-admin {
     background:
-        radial-gradient(circle at top left, rgba(15, 140, 149, 0.12), transparent 30%),
-        radial-gradient(circle at top right, rgba(0, 48, 94, 0.10), transparent 34%),
-        linear-gradient(180deg, #f8fbfd 0%, #eef4f8 100%);
+        radial-gradient(circle at top left, rgba(15, 140, 149, 0.05), transparent 30%),
+        radial-gradient(circle at top right, rgba(0, 48, 94, 0.04), transparent 30%),
+        #ffffff;
 }
 
 body.route-admin .main-header {
@@ -384,8 +384,8 @@ body.route-admin .main-header {
 .text-paste-zone textarea {
     width: 100%;
     height: 150px;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.12);
     border-radius: 8px;
     padding: 12px;
     color: var(--text-primary);
@@ -397,7 +397,7 @@ body.route-admin .main-header {
 .text-paste-zone textarea:focus {
     outline: none;
     border-color: var(--color-cyan);
-    box-shadow: 0 0 10px rgba(45, 186, 215, 0.2);
+    box-shadow: 0 0 0 3px rgba(29, 141, 184, 0.15);
 }
 
 /* Template Selector Grid */
@@ -420,8 +420,8 @@ body.route-admin .main-header {
 }
 .search-bar input {
     width: 100%;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.12);
     border-radius: 10px;
     padding: 12px 12px 12px 42px;
     color: var(--text-primary);
@@ -431,7 +431,7 @@ body.route-admin .main-header {
 .search-bar input:focus {
     outline: none;
     border-color: var(--color-cyan);
-    box-shadow: 0 0 10px rgba(45, 186, 215, 0.2);
+    box-shadow: 0 0 0 3px rgba(29, 141, 184, 0.15);
 }
 
 .template-list-grid {
@@ -445,8 +445,8 @@ body.route-admin .main-header {
 
 /* Template Card Item */
 .template-item-card {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.08);
     border-radius: 12px;
     padding: 16px;
     cursor: pointer;
@@ -465,14 +465,14 @@ body.route-admin .main-header {
     transition: var(--transition-smooth);
 }
 .template-item-card:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: #f8fbff;
     transform: translateY(-2px);
-    border-color: rgba(45, 186, 215, 0.25);
+    border-color: rgba(29, 141, 184, 0.3);
 }
 .template-item-card.selected {
-    background: rgba(0, 39, 118, 0.2);
-    border-color: rgba(45, 186, 215, 0.45);
-    box-shadow: 0 4px 20px rgba(45, 186, 215, 0.15);
+    background: rgba(0, 48, 94, 0.03);
+    border-color: rgba(29, 141, 184, 0.45);
+    box-shadow: 0 4px 20px rgba(29, 141, 184, 0.1);
 }
 .template-item-card.selected::before {
     background: linear-gradient(to bottom, var(--color-primary), var(--color-cyan));
@@ -834,15 +834,15 @@ body.route-admin .main-header {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 18px;
     align-items: start;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.08);
     padding: 16px;
     border-radius: 12px;
     transition: var(--transition-smooth);
 }
 .admin-template-item:hover {
-    border-color: rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(29, 141, 184, 0.25);
+    background: #f8fbff;
 }
 .admin-item-info {
     display: flex;
@@ -877,8 +877,8 @@ body.route-admin .main-header {
     gap: 10px;
     padding: 14px;
     border-radius: 12px;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    background: #f8fbff;
+    border: 1px solid rgba(0, 48, 94, 0.06);
 }
 
 .admin-template-fields-header {
@@ -903,8 +903,8 @@ body.route-admin .main-header {
     gap: 8px;
     padding: 7px 10px;
     border-radius: 999px;
-    background: rgba(0, 0, 0, 0.24);
-    border: 1px solid rgba(45, 186, 215, 0.12);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.1);
     font-size: 11px;
     color: var(--text-primary);
 }
@@ -936,8 +936,8 @@ body.route-admin .main-header {
     gap: 16px;
     padding: 16px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(0, 48, 94, 0.08);
+    background: #ffffff;
 }
 
 .agent-tool-main {
@@ -1216,9 +1216,16 @@ body.route-admin .main-header {
 }
 
 .badge-source-hint {
-    background: rgba(0, 156, 166, 0.14);
-    color: #8de7e0;
-    border: 1px solid rgba(0, 156, 166, 0.22);
+    background: rgba(15, 140, 149, 0.08);
+    color: #0b666d;
+    border: 1px solid rgba(15, 140, 149, 0.20);
+    font-family: var(--font-heading);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 4px 10px;
+    border-radius: 6px;
+    display: inline-block;
 }
 
 .upload-progress-list {
@@ -1236,8 +1243,8 @@ body.route-admin .main-header {
     gap: 16px;
     padding: 14px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(0, 48, 94, 0.08);
+    background: #ffffff;
 }
 
 .progress-job-main {
@@ -1528,8 +1535,8 @@ body.route-admin .main-header {
 }
 
 .recommendation-card {
-    background: rgba(10, 21, 46, 0.45);
-    border: 1px solid rgba(45, 186, 215, 0.15);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.1);
     border-radius: 12px;
     padding: 20px;
     cursor: pointer;
@@ -1550,16 +1557,16 @@ body.route-admin .main-header {
 }
 
 .recommendation-card:hover {
-    background: rgba(10, 21, 46, 0.75);
-    border-color: rgba(45, 186, 215, 0.4);
+    background: #f8fbff;
+    border-color: rgba(29, 141, 184, 0.35);
     transform: translateY(-3px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 15px rgba(45, 186, 215, 0.08);
+    box-shadow: 0 8px 24px rgba(12, 33, 58, 0.06), 0 0 15px rgba(29, 141, 184, 0.04);
 }
 
 .recommendation-card.selected {
-    background: rgba(0, 39, 118, 0.2);
+    background: rgba(0, 48, 94, 0.03);
     border-color: var(--color-cyan);
-    box-shadow: 0 8px 30px rgba(45, 186, 215, 0.18);
+    box-shadow: 0 8px 30px rgba(29, 141, 184, 0.12);
 }
 
 .recommendation-card.selected::after {
@@ -1578,7 +1585,7 @@ body.route-admin .main-header {
     font-family: var(--font-heading);
     font-weight: 700;
     font-size: 16px;
-    color: #ffffff;
+    color: var(--text-primary);
 }
 
 .rec-score-badge {
@@ -1624,29 +1631,29 @@ body.route-admin .main-header {
     display: flex;
     justify-content: flex-end;
     margin-top: 24px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(0, 48, 94, 0.1);
     padding-top: 20px;
 }
 
 /* Extracted Variables Grouped Styling */
 .extracted-group-card {
-    background: rgba(10, 17, 34, 0.45);
-    border: 1px solid rgba(45, 186, 215, 0.12);
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.1);
     border-radius: 12px;
     padding: 20px;
     margin-bottom: 20px;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 15px rgba(12, 33, 58, 0.04);
 }
 
 .extracted-group-card:hover {
-    border-color: rgba(45, 186, 215, 0.2);
+    border-color: rgba(29, 141, 184, 0.30);
 }
 
 .extracted-group-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(0, 48, 94, 0.08);
     padding-bottom: 12px;
     margin-bottom: 14px;
 }
@@ -1656,7 +1663,7 @@ body.route-admin .main-header {
     font-weight: 700;
     font-size: 15px;
     letter-spacing: 0.5px;
-    color: #ffffff;
+    color: var(--text-primary);
     display: flex;
     align-items: center;
     gap: 10px;
