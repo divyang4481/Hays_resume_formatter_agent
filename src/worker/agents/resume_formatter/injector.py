@@ -669,25 +669,29 @@ def _token_variants(token: str, sub_name: str) -> list[str]:
 
 
 def _collect_indexed_body_paragraphs(doc: Document) -> list[Paragraph]:
-    """Collect non-empty/tokenized body paragraphs in document order, including nested content."""
+    """Collect non-empty/tokenized top-level body paragraphs in document order.
+
+    Template-analysis b_XXX block IDs are based on top-level w:body paragraph blocks.
+    Using nested paragraph traversal here can shift indices and target wrong regions.
+    """
     body_el = doc._element.find(".//" + qn("w:body"))
     if body_el is None:
         return []
 
     paragraphs: list[Paragraph] = []
-    for p_el in body_el.findall(".//" + qn("w:p")):
-        if p_el.getparent() is None:
+    for child in body_el:
+        if child.tag != qn("w:p"):
             continue
 
-        texts = [(t.text or "") for t in p_el.findall(".//" + qn("w:t"))]
+        texts = [(t.text or "") for t in child.findall(".//" + qn("w:t"))]
         paragraph_text = "".join(texts).strip()
         has_tokens = bool(
-            p_el.findall(".//" + qn("w:fldSimple")) or
-            p_el.findall(".//" + qn("w:instrText")) or
-            p_el.findall(".//" + qn("w:fldChar"))
+            child.findall(".//" + qn("w:fldSimple")) or
+            child.findall(".//" + qn("w:instrText")) or
+            child.findall(".//" + qn("w:fldChar"))
         )
         if paragraph_text or has_tokens:
-            paragraphs.append(Paragraph(p_el, doc))
+            paragraphs.append(Paragraph(child, doc))
 
     return paragraphs
 
@@ -784,6 +788,7 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
         return False
 
     token = field.get("template_token") or field.get("token") or f"[{field.get('name')}]"
+    token_variants = _token_variants(token, str(field.get("name") or ""))
     injected_any = False
 
     # Filter out empty/invalid items
@@ -793,25 +798,8 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
     if not items:
         return False
 
-    # Resolve all body paragraphs once for fast lookup
-    # NOTE: Must match the visual extraction block indexing exactly — include w:fldChar
-    # (complex field / Macrobutton) paragraphs so that b_XXX indices align correctly.
-    body_el = doc._element.find(".//" + qn("w:body"))
-    all_body_paras: list[Paragraph] = []
-    if body_el is not None:
-        for child in body_el:
-            if child.tag != qn("w:p"):
-                continue
-            texts = [(t.text or "") for t in child.findall(".//" + qn("w:t"))]
-            paragraph_text = "".join(texts).strip()
-            has_tokens = bool(
-                child.findall(".//" + qn("w:fldSimple")) or
-                child.findall(".//" + qn("w:instrText")) or
-                child.findall(".//" + qn("w:fldChar"))
-            )
-            if not (paragraph_text or has_tokens):
-                continue
-            all_body_paras.append(Paragraph(child, doc))
+    # Must match template-analysis block indexing (b_XXX), including nested paragraphs.
+    all_body_paras = _collect_indexed_body_paragraphs(doc)
 
     def get_para_by_id(block_id: str) -> Paragraph | None:
         if block_id.startswith("b_"):
@@ -841,7 +829,7 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
     for idx in range(n_paras - 1):
         para = resolved_paras[idx]
         item_val = items[idx] if idx < num_items else ""
-        if _replace_token_in_paragraph(para, token, item_val):
+        if _replace_any_token_in_paragraph(para, token_variants, item_val):
             injected_any = True
 
     # For the last paragraph:
@@ -855,7 +843,7 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
         orig_p_elem = copy.deepcopy(p_elem)
 
         # Inject into the last para itself
-        if _replace_token_in_paragraph(last_para, token, items[last_idx]):
+        if _replace_any_token_in_paragraph(last_para, token_variants, items[last_idx]):
             injected_any = True
 
         # Inject subsequent items by duplicating the original paragraph
@@ -863,7 +851,7 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
         for item in items[last_idx + 1:]:
             cloned_el = copy.deepcopy(orig_p_elem)
             cloned_para = Paragraph(cloned_el, last_para._parent)
-            _replace_token_in_paragraph(cloned_para, token, item)
+            _replace_any_token_in_paragraph(cloned_para, token_variants, item)
 
             p_elem = insert_after_para._element
             p_parent = p_elem.getparent()
@@ -874,7 +862,7 @@ def _inject_array_targeted(doc: Document, field: dict[str, Any], value: list[Any
                 injected_any = True
     else:
         # Fewer items than paragraphs. Clear the last paragraph.
-        if _replace_token_in_paragraph(last_para, token, ""):
+        if _replace_any_token_in_paragraph(last_para, token_variants, ""):
             injected_any = True
 
     return injected_any
@@ -898,9 +886,8 @@ def _inject_repeat_block_targeted(doc: Document, field: dict[str, Any], value: A
         sf.get("name", ""): sf.get("field_type", "scalar") for sf in sub_fields if sf.get("name")
     }
 
-    # Resolve all body paragraphs once for fast lookup
-    # NOTE: Must match the visual extraction block indexing exactly — include w:fldChar
-    # (complex field / Macrobutton) paragraphs so that b_XXX indices align correctly.
+    # Resolve all top-level body paragraphs once for fast lookup.
+    # NOTE: Must match template-analysis block indexing exactly.
     body_el = doc._element.find(".//" + qn("w:body"))
     all_body_paras: list[Paragraph] = []
     if body_el is not None:
@@ -1045,10 +1032,10 @@ def _inject_repeat_block_targeted(doc: Document, field: dict[str, Any], value: A
 
         else:
             # Duplicate the base pattern and insert
-            new_clones = []
             for pat_idx, orig_el in enumerate(orig_elements):
                 cloned_el = copy.deepcopy(orig_el)
                 cloned_para = Paragraph(cloned_el, base_paras[pat_idx]._parent)
+                clone_replaced = False
 
                 # Inject values into the cloned element
                 for sf in sub_fields:
@@ -1058,16 +1045,18 @@ def _inject_repeat_block_targeted(doc: Document, field: dict[str, Any], value: A
                         variants = _token_variants(sf_token, sf_name)
                         sf_value = _get_item_value_for_subfield(row_item, sf_name)
                         serialized = _serialize_value(sf_value, sub_field_type.get(sf_name, "scalar"))
-                        _replace_any_token_in_paragraph(cloned_para, variants, serialized)
+                        if _replace_any_token_in_paragraph(cloned_para, variants, serialized):
+                            clone_replaced = True
 
-                # Insert cloned_el right after insert_after_para
-                p_elem = insert_after_para._element
-                p_parent = p_elem.getparent()
-                if p_parent is not None:
-                    p_index = p_parent.index(p_elem)
-                    p_parent.insert(p_index + 1, cloned_el)
-                    insert_after_para = cloned_para
-                    injected_any = True
+                if clone_replaced:
+                    # Insert cloned_el right after insert_after_para
+                    p_elem = insert_after_para._element
+                    p_parent = p_elem.getparent()
+                    if p_parent is not None:
+                        p_index = p_parent.index(p_elem)
+                        p_parent.insert(p_index + 1, cloned_el)
+                        insert_after_para = cloned_para
+                        injected_any = True
 
     # Step 4: Clear any unused pre-existing dummy blocks
     if repeat_items and len(value) < len(repeat_items):
@@ -1098,6 +1087,23 @@ def inject_data_into_docx(
     table_data_map: dict[str, list[dict[str, str]]] = {} # table_name -> list of dict values mapped by xml sub-field
     populated_fields: set[str] = set()
 
+    # Track token reuse across fields so global unresolved cleanup does not clear
+    # shared placeholders (for example "[Type text]") outside their target blocks.
+    token_usage_count: dict[str, int] = {}
+    for field in manifest_fields:
+        for raw_token in [
+            field.get("template_token") or field.get("token"),
+            *[
+                (sub or {}).get("template_token")
+                for sub in (field.get("sub_fields") or [])
+                if isinstance(sub, dict)
+            ],
+        ]:
+            tok = str(raw_token or "").strip()
+            if not tok:
+                continue
+            token_usage_count[tok] = token_usage_count.get(tok, 0) + 1
+
     # 1. Targeted injection pass first to handle visual block mappings (like multi-use [Type text])
     targeted_injected_fields = set()
     for field in manifest_fields:
@@ -1111,7 +1117,6 @@ def inject_data_into_docx(
             continue
             
         serialized = _serialize_value(value, ftype)
-        populated_fields.add(fname)
         token = field.get("template_token") or field.get("token") or f"{{{{{fname}}}}}"
         clean_token = token
         if token.upper().startswith("MERGEFIELD "):
@@ -1129,6 +1134,7 @@ def inject_data_into_docx(
         if ftype == "array" and field.get("source_block_ids"):
             if _inject_array_targeted(doc, field, value):
                 targeted_injected_fields.add(fname)
+                populated_fields.add(fname)
                 print(f"  [Targeted Array] successfully replaced {fname} using source block mappings")
             else:
                 print(f"  [Targeted Array] no replacements performed for {fname}")
@@ -1137,9 +1143,16 @@ def inject_data_into_docx(
         if ftype in ("array", "array_object") and render_strategy == "repeat_block" and field.get("source_block_ids"):
             if _inject_repeat_block_targeted(doc, field, value):
                 targeted_injected_fields.add(fname)
+                populated_fields.add(fname)
                 print(f"  [Targeted RepeatBlock] successfully replaced {fname} using source block mappings")
             else:
-                print(f"  [Targeted RepeatBlock] no replacements performed for {fname}")
+                print(f"  [Targeted RepeatBlock] no replacements performed for {fname}, trying section-token fallback")
+                if _inject_repeat_block_by_section_tokens(doc, field, value):
+                    targeted_injected_fields.add(fname)
+                    populated_fields.add(fname)
+                    print(f"  [RepeatBlock Fallback] successfully replaced {fname} by section token scan")
+                else:
+                    print(f"  [RepeatBlock Fallback] no replacements performed for {fname}")
             continue
 
         if injection_type == "table_merge_row":
@@ -1156,6 +1169,7 @@ def inject_data_into_docx(
             for tok_variant in tokens_to_try:
                 if _inject_targeted_value(doc, fname, tok_variant, serialized, field):
                     targeted_injected_fields.add(fname)
+                    populated_fields.add(fname)
                     print(f"  [Targeted Injection] successfully replaced {fname} in specified blocks using '{tok_variant}'")
                     break
 
@@ -1283,48 +1297,58 @@ def inject_data_into_docx(
     unresolved_mergefields: dict[str, str] = {}
     unresolved_text_tokens: dict[str, str] = {}
     preserved_complex_tokens: list[str] = []
+    preserved_input_tokens: list[str] = []
+    skipped_ambiguous_cleanup_tokens: set[str] = set()
+
+    def _is_ambiguous_token(tok: str) -> bool:
+        return token_usage_count.get(tok, 0) > 1
+
+    def _register_cleanup_token(stoken: str) -> None:
+        token = str(stoken or "").strip()
+        if not token:
+            return
+        if _is_ambiguous_token(token):
+            skipped_ambiguous_cleanup_tokens.add(token)
+            return
+        if token.upper().startswith("MERGEFIELD "):
+            mf = token[len("MERGEFIELD "):].strip()
+            if mf:
+                unresolved_mergefields[mf] = ""
+            return
+
+        unresolved_text_tokens[token] = ""
+        if token.startswith("[") and token.endswith("]"):
+            unresolved_text_tokens[token[1:-1].strip()] = ""
+        if token and not token.startswith("[") and not token.startswith("{"):
+            unresolved_mergefields[token] = ""
+
     for field in manifest_fields:
         fname = str(field.get("name") or "")
         if not fname or fname not in populated_fields:
             # Keep unresolved markers visible when the source value was missing.
+            source_classification = str(field.get("source_classification") or "")
             token = str(field.get("template_token") or field.get("token") or "").strip()
             if token:
                 preserved_complex_tokens.append(token)
+                if source_classification in ("recruiter_input", "input_only"):
+                    preserved_input_tokens.append(token)
             for sub in field.get("sub_fields") or []:
                 stoken = str(sub.get("template_token") or "").strip()
                 if stoken:
                     preserved_complex_tokens.append(stoken)
+                    if source_classification in ("recruiter_input", "input_only"):
+                        preserved_input_tokens.append(stoken)
             continue
 
         token = str(field.get("template_token") or field.get("token") or "").strip()
         if token:
-            if token.upper().startswith("MERGEFIELD "):
-                mf = token[len("MERGEFIELD "):].strip()
-                if mf:
-                    unresolved_mergefields[mf] = ""
-            else:
-                unresolved_text_tokens[token] = ""
-                if token.startswith("[") and token.endswith("]"):
-                    unresolved_text_tokens[token[1:-1].strip()] = ""
-                # Bare token names (e.g., CandidateID) can still back a MERGEFIELD
-                # display value, so include them in mergefield cleanup as well.
-                if token and not token.startswith("[") and not token.startswith("{"):
-                    unresolved_mergefields[token] = ""
+            _register_cleanup_token(token)
 
         for sub in field.get("sub_fields") or []:
             stoken = str(sub.get("template_token") or "").strip()
             if not stoken:
                 continue
-            if stoken.upper().startswith("MERGEFIELD "):
-                mf = stoken[len("MERGEFIELD "):].strip()
-                if mf:
-                    unresolved_mergefields[mf] = ""
-            else:
-                unresolved_text_tokens[stoken] = ""
-                if stoken.startswith("[") and stoken.endswith("]"):
-                    unresolved_text_tokens[stoken[1:-1].strip()] = ""
-                if stoken and not stoken.startswith("[") and not stoken.startswith("{"):
-                    unresolved_mergefields[stoken] = ""
+            _register_cleanup_token(stoken)
 
     if unresolved_mergefields:
         _inject_mergefields(doc, unresolved_mergefields)
@@ -1334,6 +1358,16 @@ def inject_data_into_docx(
         print(
             "[Injector] Preserved complex tokens for visibility (not auto-cleared): "
             f"{sorted(set(t for t in preserved_complex_tokens if t))}"
+        )
+    if preserved_input_tokens:
+        print(
+            "[Injector] Preserved recruiter/input tokens with missing values: "
+            f"{sorted(set(t for t in preserved_input_tokens if t))}"
+        )
+    if skipped_ambiguous_cleanup_tokens:
+        print(
+            "[Injector] Skipped global unresolved cleanup for ambiguous shared tokens: "
+            f"{sorted(skipped_ambiguous_cleanup_tokens)}"
         )
 
     out_io = BytesIO()

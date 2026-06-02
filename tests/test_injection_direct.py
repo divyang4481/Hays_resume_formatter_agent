@@ -15,7 +15,7 @@ from docx import Document
 from docx.oxml.ns import qn
 
 # ── 1. Load template ────────────────────────────────────────────────────────
-TEMPLATE_ID = 'f694b36c-1f5e-4c04-bbdc-ff717e5cbcf8'
+TEMPLATE_ID = 'd1a6d0c3-1a73-4a50-a060-4b5e772a90bd'
 template = repo.get_template(TEMPLATE_ID)
 if not template:
     print("ERROR: Template not found"); sys.exit(1)

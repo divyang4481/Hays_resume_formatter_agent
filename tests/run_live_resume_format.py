@@ -15,6 +15,7 @@ Usage:
         --output my_formatted_resume.docx \
         --host http://localhost:8000
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,6 +30,7 @@ from pathlib import Path
 # Step helpers
 # ---------------------------------------------------------------------------
 
+
 def submit_format_job(template_id: str, resume_path: Path, host: str) -> str:
     """Upload the resume file + template_id and return the format job_id."""
     import urllib.request
@@ -40,10 +42,10 @@ def submit_format_job(template_id: str, resume_path: Path, host: str) -> str:
 
     ext = resume_path.suffix.lower()
     mime_map = {
-        ".pdf":  "application/pdf",
+        ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".doc":  "application/msword",
-        ".txt":  "text/plain",
+        ".doc": "application/msword",
+        ".txt": "text/plain",
     }
     mime = mime_map.get(ext, "application/octet-stream")
 
@@ -88,7 +90,7 @@ def poll_format_job(job_id: str, host: str) -> dict:
     """Poll until the format job completes; return the full job record."""
     import urllib.request
 
-    url = f"{host}/jobs/{job_id}"
+    url = f"{host}/api/jobs/{job_id}"
     print(f"\n[Polling] Waiting for format job to complete...")
 
     while True:
@@ -197,7 +199,9 @@ def print_filled_manifest(job: dict) -> None:
     print(f"{'='*70}")
     print(f"  Populated : {len(ok_fields)}/{len(filled_values)}")
     if null_required:
-        print(f"  Missing * : {len(null_required)} required fields (recruiter-supplied):")
+        print(
+            f"  Missing * : {len(null_required)} required fields (recruiter-supplied):"
+        )
         for f in null_required:
             print(f"              - {f}")
     if null_optional:
@@ -208,6 +212,7 @@ def print_filled_manifest(job: dict) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
