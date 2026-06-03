@@ -328,17 +328,20 @@ class LLMClient:
         # 100% Generic dynamic pass-through fallback (no hardcoding of any specific field names or mappings)
         fields = []
         for c in field_candidates:
-            name = c.get("suggested_name", "")
-            fields.append({
+            name = c.get("suggested_name") or c.get("name") or ""
+            f = {
                 "name": name,
                 "display_label": c.get("display_label"),
                 "field_type": c.get("field_type", "scalar"),
-                "source_classification": "recruiter_input",
+                "source_classification": c.get("source_classification") or infer_source_classification(c) or "resume_fact",
                 "template_token": c.get("template_token"),
                 "source_block_ids": c.get("source_block_ids", []),
                 "template_evidence": c.get("template_evidence", {}),
                 "render_contract": c.get("render_contract", {}),
-            })
+            }
+            if c.get("sub_fields"):
+                f["sub_fields"] = c.get("sub_fields")
+            fields.append(f)
         return {"fields": fields}
 
     def extract_resume_fields(

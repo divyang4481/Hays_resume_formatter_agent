@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- FontAwesome for Premium Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="index.css?v=1.0.4">
+    <link rel="stylesheet" href="index.css?v=1.0.7">
 </head>
 <body class="light-theme">
     <!-- Premium Backdrop Glows -->
@@ -50,14 +50,31 @@
                     <p>Upload a candidate's CV and format it using high-quality corporate templates instantly.</p>
                 </div>
 
-                <div class="agent-grid">
-                    <!-- Left Sidebar: Configuration & Upload -->
-                    <div class="glass-card upload-card">
-                        <div class="card-header">
-                            <span class="step-num">1</span>
-                            <h3>Upload Candidate CV</h3>
+                <div class="glass-card agent-workspace-card">
+                    <!-- Wizard Stepper Indicator -->
+                    <div class="workspace-stepper">
+                        <div class="step-indicator active" id="step-ind-1">
+                            <div class="step-circle"><i class="fa-solid fa-file-arrow-up"></i></div>
+                            <span class="step-text">1. Upload CV</span>
                         </div>
+                        <div class="step-line" id="step-line-1"></div>
+                        <div class="step-indicator" id="step-ind-2">
+                            <div class="step-circle"><i class="fa-solid fa-list-check"></i></div>
+                            <span class="step-text">2. Select Template</span>
+                        </div>
+                        <div class="step-line" id="step-line-2"></div>
+                        <div class="step-indicator" id="step-ind-3">
+                            <div class="step-circle"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+                            <span class="step-text">3. Process & Results</span>
+                        </div>
+                    </div>
 
+                    <!-- STEP 1: UPLOAD CV PANEL -->
+                    <div class="step-panel active" id="step-panel-1">
+                        <div class="panel-header">
+                            <h3>Upload Candidate CV</h3>
+                            <p class="subtitle">Upload a candidate's CV document or paste the raw CV text to start formatting.</p>
+                        </div>
                         <div class="upload-options">
                             <!-- File Upload Area -->
                             <div class="drag-drop-zone" id="cv-drop-zone">
@@ -72,25 +89,56 @@
 
                             <div class="divider"><span>OR</span></div>
 
-                            <!-- Raw Text Option -->
+                            <!-- Paste Text Area -->
                             <div class="text-paste-zone">
                                 <label for="cv-text-input">Paste Candidate CV Text</label>
-                                <textarea id="cv-text-input" placeholder="Paste the CV contents here if you don't have the original file..."></textarea>
+                                <textarea id="cv-text-input" placeholder="Paste the CV contents here if you don't have the original text..."></textarea>
                             </div>
+                        </div>
+                        <div class="panel-footer-actions">
+                            <button id="btn-next-to-template" class="btn btn-primary btn-large" onclick="confirmCVSelection()" disabled>
+                                Continue to Template Selection <i class="fa-solid fa-arrow-right"></i>
+                            </button>
                         </div>
                     </div>
 
-                    <!-- Right Main Area: Template Selector -->
-                    <div class="glass-card template-card">
-                        <div class="card-header">
-                            <span class="step-num">2</span>
+                    <!-- STEP 2: SELECT TEMPLATE PANEL -->
+                    <div class="step-panel hidden" id="step-panel-2">
+                        <div class="panel-header">
                             <h3>Select Formatting Template</h3>
+                            <p class="subtitle">Choose a corporate corporate styling template from the catalog below.</p>
+                        </div>
+                        
+                        <!-- Uploaded CV Summary Info Card -->
+                        <div class="cv-summary-card">
+                            <div class="summary-details-wrapper">
+                                <div class="cv-summary-info">
+                                    <i class="fa-solid fa-file-circle-check cv-icon" id="summary-cv-icon"></i>
+                                    <div>
+                                        <div class="summary-label">Candidate CV</div>
+                                        <strong id="summary-cv-name">No file selected</strong>
+                                        <span id="summary-cv-size" class="subtitle">-</span>
+                                    </div>
+                                </div>
+                                <div class="summary-divider-vertical"></div>
+                                <div class="template-summary-info" id="summary-template-info">
+                                    <i class="fa-solid fa-file-invoice cv-icon text-muted" id="summary-template-icon"></i>
+                                    <div>
+                                        <div class="summary-label">Target Template</div>
+                                        <strong id="summary-template-name">No template selected</strong>
+                                        <span id="summary-template-version" class="subtitle">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn btn-outline btn-small" onclick="backToUpload()">
+                                <i class="fa-solid fa-pen"></i> Change CV
+                            </button>
                         </div>
 
                         <div class="template-selector-container">
                             <div class="search-bar">
                                 <i class="fa-solid fa-magnifying-glass search-icon"></i>
-                                <input type="text" id="template-search" placeholder="Search templates..." oninput="filterTemplates()">
+                                <input type="text" id="template-search" placeholder="Search templates by name or version..." oninput="filterTemplates()">
                             </div>
 
                             <div class="template-list-grid" id="agent-template-grid">
@@ -102,85 +150,84 @@
                             </div>
                         </div>
 
-                        <div class="action-footer">
+                        <div class="panel-footer-actions space-between">
+                            <button class="btn btn-outline" onclick="backToUpload()">
+                                <i class="fa-solid fa-arrow-left"></i> Back to Upload
+                            </button>
                             <button id="btn-submit-job" class="btn btn-primary btn-large" onclick="submitResumeJob()" disabled>
                                 <i class="fa-solid fa-bolt"></i> Generate Formatted Resume
                             </button>
                         </div>
                     </div>
-                </div>
 
-                <!-- Active Pipeline/Status Area -->
-                <div class="glass-card pipeline-card hidden" id="pipeline-card">
-                    <div class="pipeline-header">
-                        <div class="job-meta">
-                            <span class="badge" id="pipeline-job-type">RESUME_FORMAT</span>
-                            <span class="job-id-text">Job ID: <strong id="pipeline-job-id">-</strong></span>
-                        </div>
-                        <div class="job-actions">
+                    <!-- STEP 3: PIPELINE & RESULTS PANEL -->
+                    <div class="step-panel hidden" id="step-panel-3">
+                        <div class="panel-header-row">
+                            <div class="panel-header">
+                                <h3>AI Pipeline Execution</h3>
+                                <p class="subtitle" id="pipeline-job-id-lbl">Job ID: -</p>
+                            </div>
                             <button class="btn btn-icon-text btn-outline btn-small" id="btn-refresh-job" onclick="pollJobStatus(true)">
                                 <i class="fa-solid fa-arrows-rotate"></i> Refresh
                             </button>
                         </div>
-                    </div>
 
-                    <div class="pipeline-stages">
-                        <!-- Queue Stage -->
-                        <div class="stage-node" id="stage-queued">
-                            <div class="node-icon"><i class="fa-solid fa-hourglass-start"></i></div>
-                            <span class="node-label">Queued</span>
-                        </div>
-                        <div class="stage-connector" id="connector-queued"></div>
-
-                        <!-- Processing Stage -->
-                        <div class="stage-node" id="stage-processing">
-                            <div class="node-icon"><i class="fa-solid fa-gear fa-spin"></i></div>
-                            <span class="node-label">Processing</span>
-                        </div>
-                        <div class="stage-connector" id="connector-processing"></div>
-
-                        <!-- Completed/Failed Stage -->
-                        <div class="stage-node" id="stage-completed">
-                            <div class="node-icon"><i class="fa-solid fa-check"></i></div>
-                            <span class="node-label">Completed</span>
-                        </div>
-                    </div>
-
-                    <!-- AI Candidate Profile Card Panel -->
-                    <div class="candidate-card hidden" id="pipeline-candidate-card">
-                        <div class="candidate-card-header">
-                            <div class="candidate-avatar">
-                                <i class="fa-solid fa-user-tie"></i>
+                        <div class="pipeline-stages">
+                            <!-- Queue Stage -->
+                            <div class="stage-node" id="stage-queued">
+                                <div class="node-icon"><i class="fa-solid fa-hourglass-start"></i></div>
+                                <span class="node-label">Queued</span>
                             </div>
-                            <div class="candidate-identity">
-                                <div class="candidate-name-row">
-                                    <h4 id="candidate-card-name">Candidate Profile</h4>
-                                    <span class="badge badge-hays" id="candidate-status-badge">AI-Analyzed</span>
-                                </div>
-                                <div class="candidate-sub-row">
-                                    <span id="candidate-card-location"><i class="fa-solid fa-location-dot"></i> Unknown Location</span>
-                                </div>
+                            <div class="stage-connector" id="connector-queued"></div>
+
+                            <!-- Processing Stage -->
+                            <div class="stage-node" id="stage-processing">
+                                <div class="node-icon"><i class="fa-solid fa-gear fa-spin"></i></div>
+                                <span class="node-label">Processing</span>
+                            </div>
+                            <div class="stage-connector" id="connector-processing"></div>
+
+                            <!-- Completed/Failed Stage -->
+                            <div class="stage-node" id="stage-completed">
+                                <div class="node-icon"><i class="fa-solid fa-check"></i></div>
+                                <span class="node-label">Completed</span>
                             </div>
                         </div>
-                        <div class="candidate-card-body">
-                            <div class="summary-section">
-                                <h5><i class="fa-solid fa-file-invoice"></i> Professional Summary</h5>
-                                <p id="candidate-card-summary">Extracting candidate summary...</p>
-                            </div>
-                            <div class="skills-section">
-                                <h5><i class="fa-solid fa-brain"></i> Core Expertise</h5>
-                                <div class="skills-tags" id="candidate-card-skills">
-                                    <!-- Rendered dynamically -->
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Progress Details / Error logs -->
-                    <div class="pipeline-details">
+                        <!-- Progress indicator message -->
                         <div class="status-indicator">
                             <span class="status-dot pulsing" id="status-dot"></span>
                             <span class="status-msg" id="status-message">Agent is reading resume and matching variables...</span>
+                        </div>
+
+                        <!-- AI Candidate Profile Card Panel -->
+                        <div class="candidate-card hidden" id="pipeline-candidate-card">
+                            <div class="candidate-card-header">
+                                <div class="candidate-avatar">
+                                    <i class="fa-solid fa-user-tie"></i>
+                                </div>
+                                <div class="candidate-identity">
+                                    <div class="candidate-name-row">
+                                        <h4 id="candidate-card-name">Candidate Profile</h4>
+                                        <span class="badge badge-hays" id="candidate-status-badge">AI-Analyzed</span>
+                                    </div>
+                                    <div class="candidate-sub-row">
+                                        <span id="candidate-card-location"><i class="fa-solid fa-location-dot"></i> Unknown Location</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="candidate-card-body">
+                                <div class="summary-section">
+                                    <h5><i class="fa-solid fa-file-invoice"></i> Professional Summary</h5>
+                                    <p id="candidate-card-summary">Extracting candidate summary...</p>
+                                </div>
+                                <div class="skills-section">
+                                    <h5><i class="fa-solid fa-brain"></i> Core Expertise</h5>
+                                    <div class="skills-tags" id="candidate-card-skills">
+                                        <!-- Rendered dynamically -->
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Interactive Template Recommendation Grid -->
@@ -212,29 +259,36 @@
                                 <i class="fa-solid fa-file-arrow-down"></i> Download Formatted CV (.docx)
                             </a>
                         </div>
-                    </div>
 
-                    <!-- Collapsible Extracted Fields Viewer -->
-                    <div class="extracted-fields-viewer hidden" id="extracted-fields-viewer">
-                        <h4 onclick="toggleExtractedFields()">
-                            <i class="fa-solid fa-chevron-down" id="fields-chevron"></i> View Extracted Variables Manifest
-                        </h4>
-                        <div class="fields-grid-container hidden" id="fields-grid-container">
-                            <div class="fields-table-wrapper">
-                                <table class="custom-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Field Name</th>
-                                            <th>Type</th>
-                                            <th>Data Source Hint</th>
-                                            <th>Extracted Value</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="extracted-fields-body">
-                                        <!-- Dynamically generated rows -->
-                                    </tbody>
-                                </table>
+                        <!-- Collapsible Extracted Fields Viewer -->
+                        <div class="extracted-fields-viewer hidden" id="extracted-fields-viewer">
+                            <h4 onclick="toggleExtractedFields()">
+                                <i class="fa-solid fa-chevron-down" id="fields-chevron"></i> View Extracted Variables Manifest
+                            </h4>
+                            <div class="fields-grid-container hidden" id="fields-grid-container">
+                                <div class="fields-table-wrapper">
+                                    <table class="custom-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Field Name</th>
+                                                <th>Type</th>
+                                                <th>Data Source Hint</th>
+                                                <th>Extracted Value</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="extracted-fields-body">
+                                            <!-- Dynamically generated rows -->
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
+                        </div>
+
+                        <!-- Reset Flow Button -->
+                        <div class="panel-footer-actions" style="margin-top: 30px; border-top: 1px solid rgba(0,48,94,0.1); padding-top: 20px;">
+                            <button class="btn btn-outline" onclick="resetWizard()">
+                                <i class="fa-solid fa-rotate-left"></i> Format Another Resume
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -284,10 +338,6 @@
                             <i class="fa-solid fa-layer-group"></i>
                             <span>Template Listing</span>
                         </button>
-                        <button class="admin-rail-btn" id="admin-view-upload-btn" onclick="switchAdminView('upload')">
-                            <i class="fa-solid fa-cloud-arrow-up"></i>
-                            <span>Add New Template</span>
-                        </button>
                         <button class="admin-rail-btn" id="admin-view-resumes-btn" onclick="switchAdminView('resumes')">
                             <i class="fa-solid fa-file-arrow-down"></i>
                             <span>Formatted Resumes</span>
@@ -306,9 +356,14 @@
                                         <h3>Template Catalog & Manifest Registry</h3>
                                         <p class="subtitle">List, inspect, and edit template metadata with full manifest visibility.</p>
                                     </div>
-                                    <button class="btn btn-outline btn-small" onclick="loadAdminTemplates()">
-                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
-                                    </button>
+                                    <div class="job-action-group">
+                                        <button class="btn btn-primary btn-small" onclick="openUploadTemplateModal()">
+                                            <i class="fa-solid fa-plus"></i> Add New Template
+                                        </button>
+                                        <button class="btn btn-outline btn-small" onclick="loadAdminTemplates()">
+                                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div class="admin-summary-grid" id="admin-template-summary">
@@ -321,46 +376,6 @@
                                     <div class="loading-state">
                                         <i class="fa-solid fa-spinner fa-spin"></i>
                                         <p>Loading template registry...</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="admin-view" id="admin-view-upload">
-                            <div class="admin-grid compact-admin-grid">
-                                <div class="glass-card admin-upload-card">
-                                    <div class="card-header">
-                                        <i class="fa-solid fa-file-word icon-word"></i>
-                                        <h3>Upload New Word Template</h3>
-                                    </div>
-                                    <p class="card-subtitle">Upload corporate templates (.docx) to automatically analyze merge fields, XML styles, and generate the manifest.</p>
-
-                                    <div class="drag-drop-zone admin-zone" id="template-drop-zone">
-                                        <input type="file" id="template-file-input" accept=".docx" class="hidden-input" title="Upload DOCX template file">
-                                        <i class="fa-solid fa-file-circle-plus cloud-icon"></i>
-                                        <p class="zone-primary-text">Drag & drop DOCX template here</p>
-                                        <p class="zone-secondary-text">Only Microsoft Word (.docx) templates are supported</p>
-                                        <button class="btn btn-outline" onclick="document.getElementById('template-file-input').click()">
-                                            Select Document
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div class="glass-card upload-progress-card">
-                                    <div class="card-header-plain">
-                                        <div>
-                                            <h3>Template Analysis Progress</h3>
-                                            <p class="subtitle">Track queued uploads until manifests are ready.</p>
-                                        </div>
-                                        <button class="btn btn-outline btn-small" onclick="loadAdminJobs()">
-                                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
-                                        </button>
-                                    </div>
-                                    <div class="upload-progress-list" id="template-upload-progress-list">
-                                        <div class="loading-state">
-                                            <i class="fa-solid fa-spinner fa-spin"></i>
-                                            <p>Loading template analysis jobs...</p>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -572,7 +587,85 @@
         </div>
     </div>
 
+    <!-- Add/Upload Template Modal -->
+    <div class="modal-backdrop hidden" id="upload-template-modal" onclick="closeUploadTemplateModal(event)">
+        <div class="glass-card modal-content animate-slide-up" style="max-width: 600px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div>
+                    <h3>Upload New Template</h3>
+                    <span class="subtitle">Add a corporate Word template (.docx) to generate parsing manifest.</span>
+                </div>
+                <div class="modal-header-actions">
+                    <button class="btn-close" onclick="closeUploadTemplateModal()" title="Close upload modal" aria-label="Close upload modal">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="upload-modal-stage-select">
+                    <!-- File Drag/Drop Area -->
+                    <div class="drag-drop-zone" id="modal-template-drop-zone">
+                        <input type="file" id="modal-template-file-input" accept=".docx" class="hidden-input" title="Upload DOCX template file">
+                        <i class="fa-solid fa-file-word cloud-icon"></i>
+                        <p class="zone-primary-text" id="modal-template-primary-text">Drag & drop DOCX template here</p>
+                        <p class="zone-secondary-text" id="modal-template-secondary-text">Only Microsoft Word (.docx) templates are supported</p>
+                        <button class="btn btn-outline" onclick="document.getElementById('modal-template-file-input').click()">
+                            Browse Files
+                        </button>
+                    </div>
+                    
+                    <div class="action-footer" style="margin-top: 20px; display: flex; justify-content: flex-end;">
+                        <button id="btn-submit-template-analysis" class="btn btn-primary" onclick="submitTemplateAnalysis()" disabled>
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Template Analysis
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Analysis Pipeline / Status Area inside Modal -->
+                <div id="upload-modal-stage-progress" class="hidden">
+                    <div class="pipeline-stages" style="margin-bottom: 24px;">
+                        <!-- Queue Stage -->
+                        <div class="stage-node" id="template-stage-queued">
+                            <div class="node-icon"><i class="fa-solid fa-hourglass-start"></i></div>
+                            <span class="node-label">Queued</span>
+                        </div>
+                        <div class="stage-connector" id="template-connector-queued"></div>
+
+                        <!-- Processing Stage -->
+                        <div class="stage-node" id="template-stage-processing">
+                            <div class="node-icon"><i class="fa-solid fa-gear fa-spin"></i></div>
+                            <span class="node-label">Processing</span>
+                        </div>
+                        <div class="stage-connector" id="template-connector-processing"></div>
+
+                        <!-- Completed/Failed Stage -->
+                        <div class="stage-node" id="template-stage-completed">
+                            <div class="node-icon"><i class="fa-solid fa-check"></i></div>
+                            <span class="node-label">Completed</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Message -->
+                    <div class="status-indicator" style="margin-bottom: 20px;">
+                        <span class="status-dot pulsing" id="template-status-dot"></span>
+                        <span class="status-msg" id="template-status-message">Job received and queued...</span>
+                    </div>
+
+                    <!-- Action Details / Completion View -->
+                    <div id="template-analysis-result-actions" class="hidden" style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid rgba(0,48,94,0.1); padding-top: 16px;">
+                        <button class="btn btn-success" id="btn-view-analyzed-manifest" onclick="viewAnalyzedManifest()">
+                            <i class="fa-solid fa-eye"></i> View Manifest Details
+                        </button>
+                        <button class="btn btn-outline" onclick="resetUploadModalStage()">
+                            Upload Another
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript logic -->
-    <script src="app.js?v=1.0.4"></script>
+    <script src="app.js?v=1.0.8"></script>
 </body>
 </html>

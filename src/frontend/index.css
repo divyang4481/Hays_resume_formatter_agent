@@ -1196,10 +1196,6 @@ body.route-admin .main-header {
     animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.compact-admin-grid {
-    grid-template-columns: minmax(320px, 420px) 1fr;
-}
-
 .admin-summary-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1692,4 +1688,230 @@ body.route-admin .main-header {
         align-items: flex-start;
     }
 }
+
+/* Template Upload Modal Layout overrides */
+#upload-template-modal .modal-content {
+    background: #ffffff;
+    box-shadow: 0 24px 60px rgba(0, 48, 94, 0.16);
+}
+#upload-template-modal .drag-drop-zone {
+    margin: 10px 0;
+}
+
+/* Agent Workspace Wizard redesign styles */
+.agent-workspace-card {
+    max-width: 1000px;
+    margin: 0 auto 32px auto;
+    background: #ffffff;
+    border: 1px solid rgba(0, 48, 94, 0.08);
+}
+
+.workspace-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 34px;
+    background: rgba(0, 48, 94, 0.02);
+    padding: 20px 30px;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 48, 94, 0.04);
+}
+
+.step-indicator {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    opacity: 0.5;
+    transition: var(--transition-smooth);
+}
+
+.step-indicator.active {
+    opacity: 1;
+}
+
+.step-indicator.completed {
+    opacity: 1;
+    color: var(--color-success);
+}
+
+.step-circle {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: rgba(0, 48, 94, 0.05);
+    border: 1px solid rgba(0, 48, 94, 0.1);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    transition: var(--transition-smooth);
+}
+
+.step-indicator.active .step-circle {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-cyan));
+    color: white;
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(45, 186, 215, 0.3);
+}
+
+.step-indicator.completed .step-circle {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--color-success);
+    color: var(--color-success);
+}
+
+.step-text {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.step-line {
+    flex: 1;
+    height: 2px;
+    background: rgba(0, 48, 94, 0.08);
+    margin: 0 20px;
+    transition: var(--transition-smooth);
+}
+
+.step-line.completed {
+    background: var(--color-success);
+}
+
+/* Step Panel and Actions styling */
+.step-panel {
+    display: block;
+    animation: fadeIn 0.4s ease-out;
+}
+
+.step-panel.hidden {
+    display: none;
+}
+
+.panel-header {
+    margin-bottom: 24px;
+}
+
+.panel-header h3 {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--color-primary);
+    margin-bottom: 6px;
+}
+
+.panel-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid rgba(0, 48, 94, 0.08);
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+}
+
+.panel-header-row .panel-header {
+    margin-bottom: 0;
+}
+
+.panel-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 30px;
+    border-top: 1px solid rgba(0, 48, 94, 0.08);
+    padding-top: 20px;
+}
+
+.panel-footer-actions.space-between {
+    justify-content: space-between;
+}
+
+/* Selected CV Summary Card */
+.cv-summary-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(29, 141, 184, 0.04);
+    border: 1px solid rgba(29, 141, 184, 0.15);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    gap: 20px;
+}
+
+.summary-details-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    flex-grow: 1;
+    flex-wrap: wrap;
+}
+
+.cv-summary-info, .template-summary-info {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.summary-divider-vertical {
+    width: 1px;
+    height: 40px;
+    background: rgba(0, 48, 94, 0.12);
+    align-self: center;
+}
+
+.summary-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-cyan);
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+.template-summary-info .summary-label {
+    color: var(--color-gold);
+}
+
+.cv-summary-card strong {
+    display: block;
+    font-size: 15px;
+    color: var(--color-blue);
+    font-weight: 600;
+}
+
+.cv-summary-card .subtitle {
+    display: block;
+    font-size: 12px;
+    color: #666;
+}
+
+.cv-icon {
+    font-size: 32px;
+    color: var(--color-cyan);
+}
+
+.cv-icon.text-muted {
+    color: #999;
+}
+
+.cv-icon.text-success {
+    color: var(--color-teal);
+}
+
+@keyframes bounceOnce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+}
+
+.animate-bounce-once {
+    animation: bounceOnce 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 

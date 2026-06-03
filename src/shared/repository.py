@@ -72,6 +72,7 @@ class InMemoryRepository:
                 "template_name": template_name,
                 "object_key": object_key,
                 "version": version,
+                "created_at": datetime.now(timezone.utc),
             }
             return template_id, version
 
@@ -101,24 +102,11 @@ class InMemoryRepository:
                     "template_name": tpl["template_name"],
                     "object_key": tpl["object_key"],
                     "version": tpl["version"],
+                    "created_at": tpl.get("created_at") or datetime.now(timezone.utc),
                     "manifest": manifest,
                 })
             
-            # Sort descending by manifest's created_at, fallback to current time for newly uploaded
-            def get_sort_key(t):
-                created_at = None
-                if t.get("manifest") and t["manifest"].get("created_at"):
-                    created_at = t["manifest"]["created_at"]
-                if isinstance(created_at, str):
-                    try:
-                        return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                    except Exception:
-                        pass
-                if isinstance(created_at, datetime):
-                    return created_at
-                return datetime.now(timezone.utc)
-
-            items.sort(key=get_sort_key, reverse=True)
+            items.sort(key=lambda t: (t["created_at"], t["version"]), reverse=True)
             total = len(items)
             paginated = items[offset : offset + limit]
             return total, paginated
@@ -221,7 +209,8 @@ class PostgresRepository:
             template_id TEXT PRIMARY KEY,
             template_name TEXT NOT NULL,
             object_key TEXT NOT NULL,
-            version INTEGER NOT NULL
+            version INTEGER NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
         CREATE TABLE IF NOT EXISTS manifests (
@@ -263,6 +252,7 @@ class PostgresRepository:
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resume_summary TEXT NULL"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS field_data_mapping JSONB NULL"))
             conn.execute(text("ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS job_id TEXT NULL"))
+            conn.execute(text("ALTER TABLE templates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
 
     def get_next_template_version(self, template_name: str) -> int:
         with self.engine.begin() as conn:
@@ -318,7 +308,7 @@ class PostgresRepository:
             SELECT t.template_id, t.template_name, t.object_key, t.version, m.manifest_json as manifest
             FROM templates t
             LEFT JOIN manifests m ON t.template_id = m.template_id
-            ORDER BY COALESCE((m.manifest_json->>'created_at'), '9999-12-31T23:59:59Z') DESC, t.template_name ASC
+            ORDER BY t.created_at DESC, t.version DESC, t.template_name ASC
             LIMIT :limit OFFSET :offset
         """
         count_query = "SELECT COUNT(*) FROM templates"

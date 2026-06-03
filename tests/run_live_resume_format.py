@@ -35,7 +35,7 @@ def submit_format_job(template_id: str, resume_path: Path, host: str) -> str:
     """Upload the resume file + template_id and return the format job_id."""
     import urllib.request
 
-    url = f"{host}/format"
+    url = f"{host}/api/format"
     print(f"\n[Format Submit] Uploading resume  : {resume_path.name}")
     print(f"[Format Submit] Template ID       : {template_id}")
     print(f"[Format Submit] Endpoint          : {url}")
@@ -119,7 +119,7 @@ def download_docx(job_id: str, output_path: Path, host: str) -> None:
     """Download the completed formatted DOCX."""
     import urllib.request
 
-    url = f"{host}/jobs/{job_id}/download"
+    url = f"{host}/api/jobs/{job_id}/download"
     print(f"\n[Download] Fetching from: {url}")
     try:
         with urllib.request.urlopen(urllib.request.Request(url)) as res:

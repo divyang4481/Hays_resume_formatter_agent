@@ -9,6 +9,135 @@ let recentJobsById = {};
 let adminJobPollInterval = null;
 let activeAdminView = 'templates';
 let agentManifest = null;
+let selectedTemplateFile = null;
+let templateAnalysisInterval = null;
+let lastAnalyzedTemplateId = null;
+
+// Wizard Navigation Navigation state
+let currentStep = 1;
+
+function goToStep(stepNum) {
+    currentStep = stepNum;
+    
+    document.querySelectorAll('.step-panel').forEach(panel => {
+        panel.classList.add('hidden');
+    });
+    const activePanel = document.getElementById(`step-panel-${stepNum}`);
+    if (activePanel) activePanel.classList.remove('hidden');
+
+    for (let i = 1; i <= 3; i++) {
+        const ind = document.getElementById(`step-ind-${i}`);
+        const line = document.getElementById(`step-line-${i}`);
+
+        if (ind) {
+            ind.classList.remove('active', 'completed');
+            if (i < stepNum) {
+                ind.classList.add('completed');
+            } else if (i === stepNum) {
+                ind.classList.add('active');
+            }
+        }
+
+        if (line) {
+            line.classList.remove('completed');
+            if (i < stepNum) {
+                line.classList.add('completed');
+            }
+        }
+    }
+}
+
+window.confirmCVSelection = function() {
+    const fileInput = document.getElementById('cv-file-input');
+    const textInput = document.getElementById('cv-text-input');
+    
+    let label = 'Pasted Raw Text';
+    let size = '-';
+    let iconClass = 'fa-solid fa-file-circle-check cv-icon text-success';
+
+    if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        label = file.name;
+        size = `${(file.size / 1024).toFixed(1)} KB`;
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+            iconClass = 'fa-solid fa-file-pdf cv-icon text-danger';
+        } else if (file.name.toLowerCase().endsWith('.docx')) {
+            iconClass = 'fa-solid fa-file-word cv-icon text-primary';
+        }
+    } else if (textInput.value.trim().length === 0) {
+        alert("Please upload a CV file or paste the CV text first.");
+        return;
+    }
+
+    document.getElementById('summary-cv-name').textContent = label;
+    document.getElementById('summary-cv-size').textContent = size;
+    document.getElementById('summary-cv-icon').className = iconClass;
+
+    goToStep(2);
+};
+
+window.backToUpload = function() {
+    goToStep(1);
+};
+
+window.resetWizard = function() {
+    const fileInput = document.getElementById('cv-file-input');
+    if (fileInput) fileInput.value = '';
+    
+    const textInput = document.getElementById('cv-text-input');
+    if (textInput) textInput.value = '';
+
+    const zone = document.getElementById('cv-drop-zone');
+    if (zone) {
+        zone.querySelector('.zone-primary-text').textContent = 'Drag & drop candidate CV here';
+        zone.querySelector('.zone-secondary-text').textContent = 'Supports PDF, DOCX or TXT files';
+        const icon = zone.querySelector('.cloud-icon');
+        if (icon) icon.className = 'fa-solid fa-cloud-arrow-up cloud-icon';
+    }
+
+    selectedTemplateId = null;
+    const searchInput = document.getElementById('template-search');
+    if (searchInput) searchInput.value = '';
+    
+    document.querySelectorAll('.template-item-card').forEach(card => card.classList.remove('selected'));
+
+    const summaryTplName = document.getElementById('summary-template-name');
+    if (summaryTplName) summaryTplName.textContent = 'No template selected';
+    const summaryTplVer = document.getElementById('summary-template-version');
+    if (summaryTplVer) summaryTplVer.textContent = '-';
+    const summaryTplIcon = document.getElementById('summary-template-icon');
+    if (summaryTplIcon) summaryTplIcon.className = 'fa-solid fa-file-invoice cv-icon text-muted';
+    
+    currentJobId = null;
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+
+    const pipelineCandidateCard = document.getElementById('pipeline-candidate-card');
+    if (pipelineCandidateCard) pipelineCandidateCard.classList.add('hidden');
+    
+    const recContainer = document.getElementById('recommendations-container');
+    if (recContainer) recContainer.innerHTML = '';
+    
+    const selectionBox = document.getElementById('selection-box');
+    if (selectionBox) selectionBox.classList.add('hidden');
+    
+    const resultBox = document.getElementById('result-box');
+    if (resultBox) resultBox.classList.add('hidden');
+    
+    const extractedFieldsViewer = document.getElementById('extracted-fields-viewer');
+    if (extractedFieldsViewer) extractedFieldsViewer.classList.add('hidden');
+
+    const fieldsGrid = document.getElementById('fields-grid-container');
+    if (fieldsGrid) fieldsGrid.classList.add('hidden');
+
+    const chevron = document.getElementById('fields-chevron');
+    if (chevron) chevron.className = 'fa-solid fa-chevron-down';
+
+    validateSubmissionForm();
+    goToStep(1);
+};
 
 // API Host - proxied through the frontend container to avoid CORS in ECS/ALB.
 const API_HOST = '/api';
@@ -209,33 +338,41 @@ function initFileUploads() {
         validateSubmissionForm();
     });
 
-    // Admin Template Upload
-    const tplZone = document.getElementById('template-drop-zone');
-    const tplInput = document.getElementById('template-file-input');
+    // Modal Template Upload
+    const modalTplZone = document.getElementById('modal-template-drop-zone');
+    const modalTplInput = document.getElementById('modal-template-file-input');
 
-    tplZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        tplZone.classList.add('dragover');
-    });
+    if (modalTplZone && modalTplInput) {
+        modalTplZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            modalTplZone.classList.add('dragover');
+        });
 
-    tplZone.addEventListener('dragleave', () => {
-        tplZone.classList.remove('dragover');
-    });
+        modalTplZone.addEventListener('dragleave', () => {
+            modalTplZone.classList.remove('dragover');
+        });
 
-    tplZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        tplZone.classList.remove('dragover');
-        if (e.dataTransfer.files.length > 0) {
-            tplInput.files = e.dataTransfer.files;
-            uploadTemplateFile(e.dataTransfer.files[0]);
-        }
-    });
+        modalTplZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            modalTplZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (validateTemplateFile(file)) {
+                    modalTplInput.files = e.dataTransfer.files;
+                    handleModalTemplateSelection(file);
+                }
+            }
+        });
 
-    tplInput.addEventListener('change', () => {
-        if (tplInput.files.length > 0) {
-            uploadTemplateFile(tplInput.files[0]);
-        }
-    });
+        modalTplInput.addEventListener('change', () => {
+            if (modalTplInput.files.length > 0) {
+                const file = modalTplInput.files[0];
+                if (validateTemplateFile(file)) {
+                    handleModalTemplateSelection(file);
+                }
+            }
+        });
+    }
 }
 
 function handleCVSelection(file) {
@@ -249,13 +386,25 @@ function handleCVSelection(file) {
 function validateSubmissionForm() {
     const fileSelected = document.getElementById('cv-file-input').files.length > 0;
     const textPasted = document.getElementById('cv-text-input').value.trim().length > 0;
-    const submitBtn = document.getElementById('btn-submit-job');
+    
+    // Enable Step 1 Next button
+    const nextBtn = document.getElementById('btn-next-to-template');
+    if (nextBtn) {
+        if (fileSelected || textPasted) {
+            nextBtn.removeAttribute('disabled');
+        } else {
+            nextBtn.setAttribute('disabled', 'true');
+        }
+    }
 
-    // Allow submitting even if template is not pre-selected (agent will suggest and pause for selection)
-    if (fileSelected || textPasted) {
-        submitBtn.removeAttribute('disabled');
-    } else {
-        submitBtn.setAttribute('disabled', 'true');
+    // Enable Step 2 Generate button
+    const submitBtn = document.getElementById('btn-submit-job');
+    if (submitBtn) {
+        if (selectedTemplateId) {
+            submitBtn.removeAttribute('disabled');
+        } else {
+            submitBtn.setAttribute('disabled', 'true');
+        }
     }
 }
 
@@ -304,6 +453,31 @@ function selectTemplate(templateId) {
     selectedTemplateId = templateId;
     renderAgentTemplates();
     validateSubmissionForm();
+
+    const tpl = allTemplates.find(t => t.template_id === templateId);
+    if (tpl) {
+        const summaryTplName = document.getElementById('summary-template-name');
+        if (summaryTplName) summaryTplName.textContent = tpl.template_name;
+        
+        const summaryTplVer = document.getElementById('summary-template-version');
+        if (summaryTplVer) summaryTplVer.textContent = `Version ${tpl.version}`;
+        
+        const summaryTplIcon = document.getElementById('summary-template-icon');
+        if (summaryTplIcon) {
+            summaryTplIcon.className = 'fa-solid fa-file-signature cv-icon text-success animate-bounce-once';
+        }
+    } else {
+        const summaryTplName = document.getElementById('summary-template-name');
+        if (summaryTplName) summaryTplName.textContent = 'No template selected';
+        
+        const summaryTplVer = document.getElementById('summary-template-version');
+        if (summaryTplVer) summaryTplVer.textContent = '-';
+        
+        const summaryTplIcon = document.getElementById('summary-template-icon');
+        if (summaryTplIcon) {
+            summaryTplIcon.className = 'fa-solid fa-file-invoice cv-icon text-muted';
+        }
+    }
 }
 
 function filterTemplates() {
@@ -311,8 +485,10 @@ function filterTemplates() {
     const cards = document.querySelectorAll('#agent-template-grid .template-item-card');
 
     cards.forEach((card, idx) => {
-        const tplName = allTemplates[idx].template_name.toLowerCase();
-        if (tplName.includes(query)) {
+        const tpl = allTemplates[idx];
+        const tplName = tpl.template_name.toLowerCase();
+        const tplVer = 'v' + String(tpl.version);
+        if (tplName.includes(query) || tplVer.includes(query)) {
             card.classList.remove('hidden');
         } else {
             card.classList.add('hidden');
@@ -377,15 +553,16 @@ async function submitResumeJob() {
 }
 
 function showPipeline(jobId) {
-    const card = document.getElementById('pipeline-card');
-    card.classList.remove('hidden');
-    document.getElementById('pipeline-job-id').textContent = jobId;
+    goToStep(3);
+    
+    const jobIdLabel = document.getElementById('pipeline-job-id-lbl');
+    if (jobIdLabel) jobIdLabel.textContent = `Job ID: ${jobId}`;
 
     // Reset stages
-    document.querySelectorAll('.stage-node').forEach(node => {
+    document.querySelectorAll('#step-panel-3 .stage-node').forEach(node => {
         node.className = 'stage-node';
     });
-    document.querySelectorAll('.stage-connector').forEach(c => {
+    document.querySelectorAll('#step-panel-3 .stage-connector').forEach(c => {
         c.className = 'stage-connector';
     });
 
@@ -396,8 +573,9 @@ function showPipeline(jobId) {
     document.getElementById('fields-grid-container').classList.add('hidden');
     document.getElementById('fields-chevron').className = 'fa-solid fa-chevron-down';
 
-    // Scroll pipeline card into view
-    card.scrollIntoView({ behavior: 'smooth' });
+    // Scroll to top of card
+    const card = document.querySelector('.agent-workspace-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth' });
 }
 
 function pollJobStatus(isManual = false) {
@@ -557,6 +735,7 @@ function updatePipelineUI(job) {
                         <p class="rec-reason">${escapeHtml(rec.reason)}</p>
                         <div class="rec-meta">
                             <span><i class="fa-solid fa-list-check"></i> ${fieldsCount} fields</span>
+                            <span>· v${escapeHtml(foundTpl ? foundTpl.version : '-')}</span>
                             <span>· ID: ${escapeHtml(rec.template_id.substring(0, 8))}...</span>
                         </div>
                     </div>
@@ -809,6 +988,7 @@ async function loadRecentJobs() {
             const actionButtons = [];
             if (job.extracted_data) {
                 actionButtons.push(`<button class="btn btn-outline btn-small" onclick="showRecentJobJson('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-code"></i> View Data</button>`);
+                actionButtons.push(`<button class="btn btn-outline btn-small" onclick="showJobDataMapping('${escapeHtml(job.job_id)}')"><i class="fa-solid fa-sitemap"></i> Data Mapping</button>`);
             }
             if (job.status === 'completed') {
                 actionButtons.push(`<a href="${API_HOST}/jobs/${escapeHtml(job.job_id)}/download" class="btn btn-outline btn-small"><i class="fa-solid fa-download"></i> Download</a>`);
@@ -861,7 +1041,7 @@ function closeRecentJobJsonModal(event) {
 function getTemplateNameById(templateId) {
     if (!templateId) return 'Not Selected';
     const found = allTemplates.find(t => t.template_id === templateId);
-    return found ? found.template_name : String(templateId).substring(0, 8) + '...';
+    return found ? `${found.template_name} (v${found.version})` : String(templateId).substring(0, 8) + '...';
 }
 
 function trackExistingJob(jobId) {
@@ -922,7 +1102,7 @@ function renderAdminTemplateList(list) {
                     <div class="admin-item-info">
                     <i class="fa-solid fa-file-word admin-file-icon"></i>
                         <div>
-                            <span class="admin-item-title">${escapeHtml(tpl.template_name)}</span>
+                            <span class="admin-item-title">${escapeHtml(tpl.template_name)} (v${escapeHtml(tpl.version)})</span>
                             <div class="admin-item-subtitle">ID: ${escapeHtml(tpl.template_id)} · Version: ${escapeHtml(tpl.version)} · <span class="${statusClass}">${statusLabel}</span></div>
                             <div class="admin-item-subtitle">Object: ${escapeHtml(tpl.object_key || '-')}</div>
                         </div>
@@ -1108,46 +1288,218 @@ function trackExistingJobFromAdmin(jobId) {
     trackExistingJob(jobId);
 }
 
-async function uploadTemplateFile(file) {
-    const zone = document.getElementById('template-drop-zone');
-    const primaryText = zone.querySelector('.zone-primary-text');
-    const secondaryText = zone.querySelector('.zone-secondary-text');
+window.openUploadTemplateModal = function() {
+    resetUploadModalState();
+    document.getElementById('upload-template-modal').classList.remove('hidden');
+};
+
+window.closeUploadTemplateModal = function(event) {
+    if (event && event.target && event.target.id !== 'upload-template-modal' && !event.target.closest('.btn-close')) {
+        return;
+    }
+    document.getElementById('upload-template-modal').classList.add('hidden');
+    if (templateAnalysisInterval) {
+        clearInterval(templateAnalysisInterval);
+        templateAnalysisInterval = null;
+    }
+};
+
+function resetUploadModalState() {
+    selectedTemplateFile = null;
+    if (templateAnalysisInterval) {
+        clearInterval(templateAnalysisInterval);
+        templateAnalysisInterval = null;
+    }
+    
+    const fileInput = document.getElementById('modal-template-file-input');
+    if (fileInput) fileInput.value = '';
+    
+    const primaryText = document.getElementById('modal-template-primary-text');
+    if (primaryText) primaryText.textContent = 'Drag & drop DOCX template here';
+    const secondaryText = document.getElementById('modal-template-secondary-text');
+    if (secondaryText) secondaryText.textContent = 'Only Microsoft Word (.docx) templates are supported';
+    
+    const zone = document.getElementById('modal-template-drop-zone');
+    if (zone) {
+        zone.classList.remove('dragover');
+        const icon = zone.querySelector('.cloud-icon');
+        if (icon) icon.className = 'fa-solid fa-file-word cloud-icon';
+    }
+    
+    const submitBtn = document.getElementById('btn-submit-template-analysis');
+    if (submitBtn) {
+        submitBtn.setAttribute('disabled', 'true');
+        submitBtn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> Generate Template Analysis`;
+    }
+    
+    document.getElementById('upload-modal-stage-select').classList.remove('hidden');
+    document.getElementById('upload-modal-stage-progress').classList.add('hidden');
+    
+    document.getElementById('template-stage-queued').className = 'stage-node';
+    document.getElementById('template-stage-processing').className = 'stage-node';
+    document.getElementById('template-stage-completed').className = 'stage-node';
+    document.getElementById('template-connector-queued').className = 'stage-connector';
+    document.getElementById('template-connector-processing').className = 'stage-connector';
+    
+    document.getElementById('template-status-dot').className = 'status-dot';
+    document.getElementById('template-status-message').textContent = 'Job received and queued...';
+    document.getElementById('template-analysis-result-actions').classList.add('hidden');
+}
+
+function validateTemplateFile(file) {
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+        alert("Only Microsoft Word (.docx) templates are supported.");
+        return false;
+    }
+    return true;
+}
+
+function handleModalTemplateSelection(file) {
+    selectedTemplateFile = file;
+    const zone = document.getElementById('modal-template-drop-zone');
+    const primaryText = document.getElementById('modal-template-primary-text');
+    const secondaryText = document.getElementById('modal-template-secondary-text');
     const icon = zone.querySelector('.cloud-icon');
+    
+    primaryText.textContent = `Template Selected: ${file.name}`;
+    secondaryText.textContent = `Size: ${(file.size / 1024).toFixed(1)} KB`;
+    icon.className = 'fa-solid fa-file-circle-check cloud-icon text-success';
+    
+    const submitBtn = document.getElementById('btn-submit-template-analysis');
+    submitBtn.removeAttribute('disabled');
+}
 
-    switchAdminView('upload');
-    primaryText.textContent = `Uploading: ${file.name}...`;
-    secondaryText.textContent = `Sending ${((file.size || 0) / 1024).toFixed(1)} KB to template analyzer`;
-    icon.className = 'fa-solid fa-spinner fa-spin cloud-icon';
-
+async function submitTemplateAnalysis() {
+    if (!selectedTemplateFile) return;
+    
+    const submitBtn = document.getElementById('btn-submit-template-analysis');
+    submitBtn.setAttribute('disabled', 'true');
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Submitting...`;
+    
     try {
         const formData = new FormData();
-        formData.append('file', file);
-
+        formData.append('file', selectedTemplateFile);
+        
         const res = await fetch(`${API_HOST}/admin/templates`, {
             method: 'POST',
             body: formData
         });
-
+        
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.detail || "Failed to upload template");
+            throw new Error(errData.detail || "Failed to submit template analysis");
         }
-
+        
         const data = await res.json();
-        primaryText.textContent = `Queued: ${file.name}`;
-        secondaryText.textContent = `Analysis job ${data.analysis_job_id} is now queued`;
-        icon.className = 'fa-solid fa-circle-check cloud-icon text-success';
-
-        loadAdminTemplates(false);
-        loadAdminJobs(false);
+        const jobId = data.analysis_job_id;
+        
+        document.getElementById('upload-modal-stage-select').classList.add('hidden');
+        document.getElementById('upload-modal-stage-progress').classList.remove('hidden');
+        
+        pollTemplateAnalysisJob(jobId);
     } catch (err) {
         console.error(err);
         alert("Upload error: " + err.message);
-        primaryText.textContent = `Drag & drop DOCX template here`;
-        secondaryText.textContent = `Only Microsoft Word (.docx) templates are supported`;
-        icon.className = 'fa-solid fa-file-circle-plus cloud-icon';
+        submitBtn.removeAttribute('disabled');
+        submitBtn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> Generate Template Analysis`;
     }
 }
+
+function pollTemplateAnalysisJob(jobId) {
+    if (templateAnalysisInterval) clearInterval(templateAnalysisInterval);
+    
+    const sq = document.getElementById('template-stage-queued');
+    const sp = document.getElementById('template-stage-processing');
+    const sc = document.getElementById('template-stage-completed');
+    const cq = document.getElementById('template-connector-queued');
+    const cp = document.getElementById('template-connector-processing');
+    const statusDot = document.getElementById('template-status-dot');
+    const statusMsg = document.getElementById('template-status-message');
+    
+    sq.className = 'stage-node active';
+    sp.className = 'stage-node';
+    sc.className = 'stage-node';
+    cq.className = 'stage-connector';
+    cp.className = 'stage-connector';
+    statusDot.className = 'status-dot pulsing';
+    statusMsg.textContent = 'Template analysis queued...';
+    
+    const checkStatus = async () => {
+        try {
+            const res = await fetch(`${API_HOST}/jobs/${jobId}`);
+            if (!res.ok) return;
+            const job = await res.json();
+            
+            if (job.status === 'queued') {
+                sq.className = 'stage-node active';
+                sp.className = 'stage-node';
+                sc.className = 'stage-node';
+                cq.className = 'stage-connector';
+                cp.className = 'stage-connector';
+                statusDot.className = 'status-dot pulsing';
+                statusMsg.textContent = 'Template analysis queued...';
+            } else if (job.status === 'processing') {
+                sq.className = 'stage-node completed';
+                sp.className = 'stage-node active';
+                sc.className = 'stage-node';
+                cq.className = 'stage-connector completed';
+                cp.className = 'stage-connector';
+                statusDot.className = 'status-dot pulsing';
+                statusMsg.textContent = 'Parsing merge fields, styles, and XML registry...';
+            } else if (job.status === 'completed') {
+                clearInterval(templateAnalysisInterval);
+                templateAnalysisInterval = null;
+                
+                sq.className = 'stage-node completed';
+                sp.className = 'stage-node completed';
+                sc.className = 'stage-node completed';
+                cq.className = 'stage-connector completed';
+                cp.className = 'stage-connector completed';
+                statusDot.className = 'status-dot';
+                statusMsg.textContent = 'Analysis completed successfully!';
+                
+                lastAnalyzedTemplateId = job.template_id;
+                
+                document.getElementById('template-analysis-result-actions').classList.remove('hidden');
+                const viewDetailsBtn = document.getElementById('btn-view-analyzed-manifest');
+                if (viewDetailsBtn) viewDetailsBtn.classList.remove('hidden');
+                
+                loadAdminTemplates(false);
+                loadAdminJobs(false);
+            } else if (job.status === 'failed') {
+                clearInterval(templateAnalysisInterval);
+                templateAnalysisInterval = null;
+                
+                sq.className = 'stage-node completed';
+                sp.className = 'stage-node completed';
+                sc.className = 'stage-node failed';
+                cq.className = 'stage-connector completed';
+                cp.className = 'stage-connector';
+                statusDot.className = 'status-dot';
+                statusMsg.innerHTML = `<span class="text-danger">Analysis failed: ${escapeHtml(job.error || 'Unknown error')}</span>`;
+                
+                document.getElementById('template-analysis-result-actions').classList.remove('hidden');
+                const viewDetailsBtn = document.getElementById('btn-view-analyzed-manifest');
+                if (viewDetailsBtn) viewDetailsBtn.classList.add('hidden');
+            }
+        } catch (e) {
+            console.error("Error polling template status", e);
+        }
+    };
+    
+    checkStatus();
+    templateAnalysisInterval = setInterval(checkStatus, 3000);
+}
+
+window.viewAnalyzedManifest = function() {
+    if (!lastAnalyzedTemplateId) return;
+    closeUploadTemplateModal();
+    inspectManifest(lastAnalyzedTemplateId);
+};
+
+window.resetUploadModalStage = function() {
+    resetUploadModalState();
+};
 
 // 7. Modal Manifest Inspector Drawer
 async function inspectManifest(templateId) {
@@ -1220,11 +1572,7 @@ function closeManifestModal() {
 
 function sortTemplatesLatestFirst(templates) {
     if (!Array.isArray(templates)) return [];
-    return templates.sort((a, b) => {
-        const dateA = a.manifest?.created_at ? new Date(a.manifest.created_at) : new Date();
-        const dateB = b.manifest?.created_at ? new Date(b.manifest.created_at) : new Date();
-        return dateB - dateA;
-    });
+    return templates;
 }
 
 let manifestCache = {};
