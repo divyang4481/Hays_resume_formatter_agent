@@ -29,42 +29,30 @@ MVP starter implementation for AWS-oriented resume formatting pipeline using API
 - `docker` - Docker image build files
 - `scripts` - deploy, env bootstrap, and extraction demo scripts
 
-## Create AWS infrastructure
+## Deploy AWS Infrastructure (S3, SQS, RDS, ECR, ECS Fargate)
 
-Provision CloudFormation stack named `resume-formatteragent-2`.
+A comprehensive PowerShell orchestrator script `deploy-aws.ps1` is provided to deploy all 3 parts of the AWS CloudFormation infrastructure, build local docker containers, push them to ECR, and start the Fargate services.
 
-Region policy: use Mumbai region only (`ap-south-1`).
+For full detailed parameters, prerequisites, and raw AWS CLI commands, see [infra/cloudformation/README.md](file:///c:/workspace/CCCTTNS/Hays_resume_formatter_agent/infra/cloudformation/README.md).
 
+### Quick Deployment Examples
+
+#### 1. Deploy all resources and services:
 ```powershell
-./scripts/deploy_stack.ps1 `
-  -StackName resume-formatteragent-2 `
-  -Region ap-south-1 `
-  -AllowedIngressCidr 0.0.0.0/0 `
-  -DBUsername appuser `
-  -DBPassword ReplaceMe123!
+.\scripts\deploy-aws.ps1 -Action DeployAll -DBPassword "YourSecurePassword123!"
 ```
 
-Single-line alternative:
-
+#### 2. Scale services up or down (0 or 1 tasks):
 ```powershell
-./scripts/deploy_stack.ps1 -StackName resume-formatteragent-2 -Region ap-south-1 -AllowedIngressCidr 0.0.0.0/0 -DBUsername appuser -DBPassword ReplaceMe123!
+# Scale worker down to 0 (stop)
+.\scripts\deploy-aws.ps1 -Action Scale -ServiceToScale worker -DesiredCount 0
+
+# Scale worker up to 1 (run)
+.\scripts\deploy-aws.ps1 -Action Scale -ServiceToScale worker -DesiredCount 1
+
+# Scale api down to 0
+.\scripts\deploy-aws.ps1 -Action Scale -ServiceToScale api -DesiredCount 0
 ```
-
-This deploy creates a dedicated VPC and two subnets automatically (separate from your existing stacks).
-
-Generate `.env` from stack outputs:
-
-```powershell
-./scripts/stack_to_env.ps1 -StackName resume-formatteragent-2 -Region ap-south-1 -DBUsername appuser -DBPassword "ReplaceMe123!"
-```
-
-Set Bedrock model settings in `.env`:
-
-- `LLM_PROVIDER=bedrock`
-- `LLM_MODEL_FAST=anthropic.claude-3-5-haiku-20241022-v1:0`
-- `LLM_MODEL_STRONG=anthropic.claude-3-5-sonnet-20240620-v1:0`
-- `BEDROCK_AGENT_ID=IUJ4II3JAI`
-- `BEDROCK_AGENT_ALIAS_ID=VYKEJ4BOMZ`
 
 AWS runtime variables used by docker compose:
 

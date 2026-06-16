@@ -101,8 +101,16 @@ def _collect_section_lines(raw_resume_text: str, heading_terms: list[str], max_l
                 break
             continue
 
-        is_new_heading = any(h in low for h in lowered_headings)
         looks_like_heading = _looks_like_new_heading(normalized)
+        is_new_heading = False
+        for h in lowered_headings:
+            if h in low:
+                # The heading term must be near the start of the line and not a long body paragraph
+                idx = low.index(h)
+                if idx < 20:
+                    if len(normalized) <= 80 or looks_like_heading:
+                        is_new_heading = True
+                        break
 
         if is_new_heading:
             in_section = True
@@ -397,6 +405,8 @@ def _apply_heuristic_resume_fact_fallback(
 ) -> int:
     applied = 0
     for field in fields:
+        if _is_instruction_resume_field(field):
+            continue
         name = str(field.get("name") or "").strip()
         if not name:
             continue
@@ -430,6 +440,8 @@ def _normalize_and_backfill_array_object_fields(
 ) -> int:
     applied = 0
     for field in fields:
+        if _is_instruction_resume_field(field):
+            continue
         field_type = str(field.get("field_type") or "scalar").lower()
         if field_type != "array_object":
             continue
@@ -672,47 +684,53 @@ def extract_resume_fact_fields(state: ResumeFormatState) -> ResumeFormatState:
     raw_text = state.get("raw_resume_text") or ""
     fields = state.get("resume_fact_fields") or []
 
-    print(f"[ExtractData] Extracting resume_fact values for {len(fields)} fields...")
+    # Filter out instruction fields from the LLM extraction payload
+    llm_fields = [f for f in fields if not _is_instruction_resume_field(f)]
+
+    print(f"[ExtractData] Extracting resume_fact values for {len(llm_fields)} fields (out of {len(fields)})...")
     agentic_core = AgenticCore()
-    try:
-        extracted = agentic_core.extract_resume_fields(
-            fields=fields,
-            resume_text=raw_text,
-            use_strong_model=True,
-        )
-        print(f"[ExtractData] Extracted {len(extracted)} fields: {list(extracted.keys())}")
-    except Exception as e:
-        print(f"[ExtractData] LLM extraction failed ({e}), using heuristic fallback")
-        extracted = {"field_mappings": {}}
-        for field in fields:
-            name = str(field.get("name") or "").strip()
-            if not name:
-                continue
+    
+    extracted = {"field_mappings": {}}
+    if llm_fields:
+        try:
+            llm_result = agentic_core.extract_resume_fields(
+                fields=llm_fields,
+                resume_text=raw_text,
+                use_strong_model=True,
+            )
+            extracted["field_mappings"].update(llm_result.get("field_mappings", {}))
+            print(f"[ExtractData] Extracted {len(llm_result.get('field_mappings', {}))} fields: {list(llm_result.get('field_mappings', {}).keys())}")
+        except Exception as e:
+            print(f"[ExtractData] LLM extraction failed ({e}), using heuristic fallback")
+            for field in llm_fields:
+                name = str(field.get("name") or "").strip()
+                if not name:
+                    continue
 
-            value = _heuristic_value_for_field(field, raw_text)
-            field_type = str(field.get("field_type") or "scalar").lower()
-            if _is_empty_mapped_value(value):
-                if field_type == "array_object" or field_type == "array":
-                    value = []
-                else:
-                    value = ""
+                value = _heuristic_value_for_field(field, raw_text)
+                field_type = str(field.get("field_type") or "scalar").lower()
+                if _is_empty_mapped_value(value):
+                    if field_type == "array_object" or field_type == "array":
+                        value = []
+                    else:
+                        value = ""
 
-            extracted["field_mappings"][name] = {
-                "value": value,
-                "status": "mapped" if not _is_empty_mapped_value(value) else "missing",
-                "confidence": 0.35 if not _is_empty_mapped_value(value) else 0.0,
-                "source": {
-                    "page": 1,
-                    "section": "Heuristic Resume Fallback",
-                    "evidence_text": "Derived from deterministic semantic parsing.",
-                },
-            }
+                extracted["field_mappings"][name] = {
+                    "value": value,
+                    "status": "mapped" if not _is_empty_mapped_value(value) else "missing",
+                    "confidence": 0.35 if not _is_empty_mapped_value(value) else 0.0,
+                    "source": {
+                        "page": 1,
+                        "section": "Heuristic Resume Fallback",
+                        "evidence_text": "Derived from deterministic semantic parsing.",
+                    },
+                }
 
     field_mappings = extracted.setdefault("field_mappings", {})
 
     # Retry only missing fields in a focused second pass to reduce omissions.
     missing_fields = [
-        f for f in fields
+        f for f in llm_fields
         if _is_empty_mapped_value((field_mappings.get(f.get("name", ""), {}) or {}).get("value"))
     ]
     if missing_fields:

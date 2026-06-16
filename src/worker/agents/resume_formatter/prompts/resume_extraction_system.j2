@@ -26,8 +26,12 @@ Missing evidence rules:
 - If evidence is missing for an array_object field, return [].
 
 Qualification field rules:
-- For qualification/certification/accreditation/license fields, extract actual credential names from the resume.
+- For qualification/certification/accreditation/license fields, extract actual credential names from the resume (e.g. "Solicitor of the Supreme Court", "Legal Practice Course").
 - Do not return only heading words such as "Certification", "Certifications", or "Professional qualifications" when credential entries are present.
+- Extract all professional qualifications, certifications, admissions, or licenses, even if they are listed under Education, Academic, or Admission sections.
+- The sub-field keys in an `array_object` are derived from target template tokens (e.g., `check_type` from `CheckType`). Map actual resume list items (like qualification titles) directly into these keys, even if the key name is not a literal match (e.g., map the qualification name/title string to the `check_type` key).
+- Scan sections like 'Education', 'Qualifications', 'Admission', or 'Professional' in the resume to find these credentials.
+
 
 Few-shot examples:
 
@@ -55,3 +59,25 @@ Example 5 - professional qualifications (array_object)
 Input field: {"name":"credential_entries","field_type":"array_object","sub_fields":[{"name":"credential_name"}]}
 Resume evidence: "Certification: AWS Certified Solutions Architect; Microsoft Certified: Azure AI Engineer Associate"
 Output: {"extracted":{"credential_entries":[{"credential_name":"AWS Certified Solutions Architect"},{"credential_name":"Microsoft Certified: Azure AI Engineer Associate"}]}}
+
+Example 6 - Legal Solicitor: Work Experience, Qualifications, Education, & Skills
+Input fields: [{"name":"key_skills","field_type":"array"},{"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]},{"name":"education_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"institution"},{"name":"degree"}]},{"name":"experience_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"organisation"},{"name":"responsibilities"}]}]
+Resume evidence: "Skills: Contract Drafting, Risk Assessment. Qualifications: Solicitor of the Supreme Court of England & Wales (admitted 2004), Legal Practice Course. Education: Oxford (1993-1996) - MA Jurisprudence. Employment: Solicitor at Manches LLP (July 2006 to July 2007); drafted construction consultancy contracts."
+Output: {"extracted":{"key_skills":["Contract Drafting","Risk Assessment"],"professional_qualifications":[{"check_type":"Solicitor of the Supreme Court of England & Wales"},{"check_type":"Legal Practice Course"}],"education_entries":[{"period":"1993-1996","institution":"Oxford","degree":"MA Jurisprudence"}],"experience_entries":[{"period":"July 2006 - July 2007","organisation":"Manches LLP","responsibilities":["Drafted construction contracts"]}]}}
+
+Example 7 - Financial Industry: Work Experience, Qualifications, Education, & Skills
+Input fields: [{"name":"key_skills","field_type":"array"},{"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]},{"name":"education_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"institution"},{"name":"degree"}]},{"name":"experience_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"organisation"},{"name":"responsibilities"}]}]
+Resume evidence: "Skills: Financial Modeling, Valuations. Credentials: CFA Charterholder, Series 7. Education: LSE (2010-2013) - BSc Finance. Experience: Senior Analyst at Goldman Sachs (Jan 2018 - Dec 2022); managed $200M equity portfolio."
+Output: {"extracted":{"key_skills":["Financial Modeling","Valuations"],"professional_qualifications":[{"check_type":"Chartered Financial Analyst (CFA) Charterholder"},{"check_type":"Series 7 License"}],"education_entries":[{"period":"2010-2013","institution":"LSE","degree":"BSc Finance"}],"experience_entries":[{"period":"Jan 2018 - Dec 2022","organisation":"Goldman Sachs","responsibilities":["Managed $200M equity portfolio"]}]}}
+
+Example 8 - General Practitioner / Medical Industry: Work Experience, Qualifications, Education, & Skills
+Input fields: [{"name":"key_skills","field_type":"array"},{"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]},{"name":"education_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"institution"},{"name":"degree"}]},{"name":"experience_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"organisation"},{"name":"responsibilities"}]}]
+Resume evidence: "Skills: Primary Care, Diagnostics. Credentials: Board Certified Family Medicine Practitioner, ALS. Education: Edinburgh Medical School (2001-2006) - MBChB Medicine. Employment: General Practitioner at NHS Clinic (2015 to Present); diagnosed acute conditions."
+Output: {"extracted":{"key_skills":["Primary Care","Diagnostics"],"professional_qualifications":[{"check_type":"Board Certified Family Medicine Practitioner"},{"check_type":"Advanced Life Support (ALS)"}],"education_entries":[{"period":"2001-2006","institution":"Edinburgh Medical School","degree":"MBChB Medicine"}],"experience_entries":[{"period":"2015 - Present","organisation":"NHS Clinic","responsibilities":["Diagnosed acute conditions"]}]}}
+
+Example 9 - Software Industry: Work Experience, Qualifications, Education, & Skills
+Input fields: [{"name":"key_skills","field_type":"array"},{"name":"professional_qualifications","field_type":"array_object","sub_fields":[{"name":"check_type"}]},{"name":"education_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"institution"},{"name":"degree"}]},{"name":"experience_entries","field_type":"array_object","sub_fields":[{"name":"period"},{"name":"organisation"},{"name":"responsibilities"}]}]
+Resume evidence: "Skills: Python, Microservices, System Design. Accreditations: AWS Solutions Architect, CKAD. Education: Stanford (2014-2018) - BS Computer Science. Experience: Senior Developer at Acme Corp (Oct 2020 - Current); designed distributed APIs."
+Output: {"extracted":{"key_skills":["Python","Microservices","System Design"],"professional_qualifications":[{"check_type":"AWS Certified Solutions Architect"},{"check_type":"Certified Kubernetes Application Developer (CKAD)"}],"education_entries":[{"period":"2014-2018","institution":"Stanford","degree":"BS Computer Science"}],"experience_entries":[{"period":"Oct 2020 - Current","organisation":"Acme Corp","responsibilities":["Designed distributed APIs"]}]}}
+
+

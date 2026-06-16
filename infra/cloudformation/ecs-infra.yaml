@@ -1,0 +1,569 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Cluster, ALB, Task Definitions, and Services for Hays Resume Formatter Agent on AWS Fargate.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: hays-resume-formatter
+    Description: Prefix used for naming resources.
+  Environment:
+    Type: String
+    Default: dev
+    Description: Deployment environment (e.g. dev, staging, prod).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where ALB and ECS services will be deployed.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of at least two Subnet IDs in different Availability Zones for ALB and ECS tasks.
+  StorageBucketName:
+    Type: String
+    Description: Name of the existing S3 storage bucket.
+  SQSQueueArn:
+    Type: String
+    Description: ARN of the existing SQS queue.
+  SQSQueueUrl:
+    Type: String
+    Description: URL of the existing SQS queue.
+  DatabaseUrl:
+    Type: String
+    Description: PostgreSQL Database connection URL.
+  ApiImageUri:
+    Type: String
+    Description: ECR Image URI for the API container.
+  WorkerImageUri:
+    Type: String
+    Description: ECR Image URI for the Worker container.
+  FrontendImageUri:
+    Type: String
+    Description: ECR Image URI for the Frontend container.
+  ApiDesiredCount:
+    Type: Number
+    Default: 1
+    Description: Desired count of ECS API tasks.
+  WorkerDesiredCount:
+    Type: Number
+    Default: 1
+    Description: Desired count of ECS Worker tasks.
+  FrontendDesiredCount:
+    Type: Number
+    Default: 1
+    Description: Desired count of ECS Frontend tasks.
+  BedrockAgentId:
+    Type: String
+    Default: ""
+  BedrockAgentAliasId:
+    Type: String
+    Default: ""
+  BedrockKbId:
+    Type: String
+    Default: ""
+  EnableDocling:
+    Type: String
+    Default: "true"
+  EnableTikaFallback:
+    Type: String
+    Default: "true"
+  EnableGpuWorker:
+    Type: String
+    Default: "false"
+  ParserTimeoutSeconds:
+    Type: String
+    Default: "300"
+  MaxFileSizeMb:
+    Type: String
+    Default: "10"
+  LlmBackend:
+    Type: String
+    Default: "aws_bedrock"
+  LlmModelName:
+    Type: String
+    Default: "meta.llama3-70b-instruct-v1:0"
+  BedrockTemplateAnalysisModelId:
+    Type: String
+    Default: "qwen.qwen3-235b-a22b-2507-v1:0"
+  BedrockFallbackModelId:
+    Type: String
+    Default: "qwen.qwen3-235b-a22b-2507-v1:0"
+  LlmProvider:
+    Type: String
+    Default: "bedrock"
+  LlmModelFast:
+    Type: String
+    Default: "qwen.qwen3-235b-a22b-2507-v1:0"
+  LlmModelStrong:
+    Type: String
+    Default: "qwen.qwen3-235b-a22b-2507-v1:0"
+  EnableAuth:
+    Type: String
+    Default: "false"
+  LogLevel:
+    Type: String
+    Default: "INFO"
+
+Resources:
+  # ECS Cluster
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ProjectName}-cluster-${Environment}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Log Group for container logs
+  EcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ProjectName}-${Environment}
+      RetentionInDays: 7
+
+  # ECS Task Execution Role (pulls images, writes logs)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-execution-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ECS Task Role (accesses S3, SQS, Bedrock)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-task-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ECS-Task-Permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub arn:aws:s3:::${StorageBucketName}
+                  - !Sub arn:aws:s3:::${StorageBucketName}/*
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
+                Resource: !Ref SQSQueueArn
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub Security group for ALB in ${ProjectName}-${Environment}
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb-sg-${Environment}
+
+  # ECS Tasks Security Group (Allows traffic only from ALB, and allows all outbound)
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub Security group for ECS services in ${ProjectName}-${Environment}
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ecs-sg-${Environment}
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-alb-${Environment}
+      Subnets: !Ref SubnetIds
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Type: application
+      IpAddressType: ipv4
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb-${Environment}
+
+  # ALB Target Groups
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-api-tg-${Environment}
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 8000
+      TargetType: ip
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-api-tg-${Environment}
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-frontend-tg-${Environment}
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-frontend-tg-${Environment}
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # ALB Routing Rule for API
+  ALBApiRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /api/*
+            - /docs*
+            - /openapi.json
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+
+  # ECS Task Definitions
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}-api-${Environment}
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      TaskRoleArn: !Ref ECSTaskRole
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ApiImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+          Command:
+            - uvicorn
+            - src.api.main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - 8000
+            - --root-path
+            - ""
+          Environment:
+            - Name: APP_ENV
+              Value: !Ref Environment
+            - Name: USE_AWS_SERVICES
+              Value: "true"
+            - Name: CLOUD_PROVIDER
+              Value: "aws"
+            - Name: RUNTIME_MODE
+              Value: "aws"
+            - Name: PROCESSING_MODE
+              Value: "async"
+            - Name: QUEUE_PROVIDER
+              Value: "sqs"
+            - Name: STORAGE_PROVIDER
+              Value: "s3"
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: S3_BUCKET
+              Value: !Ref StorageBucketName
+            - Name: S3_BUCKET_INPUT
+              Value: !Ref StorageBucketName
+            - Name: S3_BUCKET_OUTPUT
+              Value: !Ref StorageBucketName
+            - Name: SQS_TEMPLATE_ANALYSIS_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: SQS_RESUME_FORMAT_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: SQS_PROCESSING_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: DATABASE_URL
+              Value: !Ref DatabaseUrl
+            - Name: BEDROCK_AGENT_ID
+              Value: !Ref BedrockAgentId
+            - Name: BEDROCK_AGENT_ALIAS_ID
+              Value: !Ref BedrockAgentAliasId
+            - Name: BEDROCK_KB_ID
+              Value: !Ref BedrockKbId
+            - Name: ENABLE_DOCLING
+              Value: !Ref EnableDocling
+            - Name: ENABLE_TIKA_FALLBACK
+              Value: !Ref EnableTikaFallback
+            - Name: ENABLE_GPU_WORKER
+              Value: !Ref EnableGpuWorker
+            - Name: PARSER_TIMEOUT_SECONDS
+              Value: !Ref ParserTimeoutSeconds
+            - Name: MAX_FILE_SIZE_MB
+              Value: !Ref MaxFileSizeMb
+            - Name: LLM_BACKEND
+              Value: !Ref LlmBackend
+            - Name: LLM_MODEL_NAME
+              Value: !Ref LlmModelName
+            - Name: BEDROCK_TEMPLATE_ANALYSIS_MODEL_ID
+              Value: !Ref BedrockTemplateAnalysisModelId
+            - Name: BEDROCK_FALLBACK_MODEL_ID
+              Value: !Ref BedrockFallbackModelId
+            - Name: LLM_PROVIDER
+              Value: !Ref LlmProvider
+            - Name: LLM_MODEL_FAST
+              Value: !Ref LlmModelFast
+            - Name: LLM_MODEL_STRONG
+              Value: !Ref LlmModelStrong
+            - Name: ENABLE_AUTH
+              Value: !Ref EnableAuth
+            - Name: LOG_LEVEL
+              Value: !Ref LogLevel
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EcsLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}-worker-${Environment}
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      TaskRoleArn: !Ref ECSTaskRole
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref WorkerImageUri
+          Essential: true
+          Command:
+            - python
+            - -m
+            - src.worker.main
+          Environment:
+            - Name: APP_ENV
+              Value: !Ref Environment
+            - Name: USE_AWS_SERVICES
+              Value: "true"
+            - Name: CLOUD_PROVIDER
+              Value: "aws"
+            - Name: RUNTIME_MODE
+              Value: "aws"
+            - Name: PROCESSING_MODE
+              Value: "async"
+            - Name: QUEUE_PROVIDER
+              Value: "sqs"
+            - Name: STORAGE_PROVIDER
+              Value: "s3"
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: S3_BUCKET
+              Value: !Ref StorageBucketName
+            - Name: S3_BUCKET_INPUT
+              Value: !Ref StorageBucketName
+            - Name: S3_BUCKET_OUTPUT
+              Value: !Ref StorageBucketName
+            - Name: SQS_TEMPLATE_ANALYSIS_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: SQS_RESUME_FORMAT_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: SQS_PROCESSING_QUEUE_URL
+              Value: !Ref SQSQueueUrl
+            - Name: DATABASE_URL
+              Value: !Ref DatabaseUrl
+            - Name: BEDROCK_AGENT_ID
+              Value: !Ref BedrockAgentId
+            - Name: BEDROCK_AGENT_ALIAS_ID
+              Value: !Ref BedrockAgentAliasId
+            - Name: BEDROCK_KB_ID
+              Value: !Ref BedrockKbId
+            - Name: ENABLE_DOCLING
+              Value: !Ref EnableDocling
+            - Name: ENABLE_TIKA_FALLBACK
+              Value: !Ref EnableTikaFallback
+            - Name: ENABLE_GPU_WORKER
+              Value: !Ref EnableGpuWorker
+            - Name: PARSER_TIMEOUT_SECONDS
+              Value: !Ref ParserTimeoutSeconds
+            - Name: MAX_FILE_SIZE_MB
+              Value: !Ref MaxFileSizeMb
+            - Name: LLM_BACKEND
+              Value: !Ref LlmBackend
+            - Name: LLM_MODEL_NAME
+              Value: !Ref LlmModelName
+            - Name: BEDROCK_TEMPLATE_ANALYSIS_MODEL_ID
+              Value: !Ref BedrockTemplateAnalysisModelId
+            - Name: BEDROCK_FALLBACK_MODEL_ID
+              Value: !Ref BedrockFallbackModelId
+            - Name: LLM_PROVIDER
+              Value: !Ref LlmProvider
+            - Name: LLM_MODEL_FAST
+              Value: !Ref LlmModelFast
+            - Name: LLM_MODEL_STRONG
+              Value: !Ref LlmModelStrong
+            - Name: ENABLE_AUTH
+              Value: !Ref EnableAuth
+            - Name: LOG_LEVEL
+              Value: !Ref LogLevel
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EcsLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}-frontend-${Environment}
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      TaskRoleArn: !Ref ECSTaskRole
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+          Environment:
+            # Set to localhost so the Nginx config loads successfully,
+            # though all browser traffic to /api/* goes directly to the API container via ALB.
+            - Name: API_URL
+              Value: http://localhost:8000
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EcsLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  # ECS Services
+  ApiService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBApiRule
+    Properties:
+      Cluster: !Ref EcsCluster
+      ServiceName: !Sub ${ProjectName}-api-${Environment}
+      TaskDefinition: !Ref ApiTaskDefinition
+      DesiredCount: !Ref ApiDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+          Subnets: !Ref SubnetIds
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 8000
+          TargetGroupArn: !Ref ApiTargetGroup
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref EcsCluster
+      ServiceName: !Sub ${ProjectName}-worker-${Environment}
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: !Ref WorkerDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+          Subnets: !Ref SubnetIds
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      Cluster: !Ref EcsCluster
+      ServiceName: !Sub ${ProjectName}-frontend-${Environment}
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+          Subnets: !Ref SubnetIds
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+Outputs:
+  ClusterName:
+    Value: !Ref EcsCluster
+  AlbDnsName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Description: Public URL to access the Frontend web application and backend API.
