@@ -12,7 +12,6 @@ class PromptManager:
             prompt_roots = [
                 "src/worker/agents/template_analysis/prompts",
                 "src/worker/agents/resume_formatter/prompts",
-                "prompts", # legacy fallback search root
             ]
         
         roots = [Path(root) for root in prompt_roots]
