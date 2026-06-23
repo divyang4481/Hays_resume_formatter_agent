@@ -60,3 +60,42 @@ def test_apply_instruction_resume_fields_noop_when_resume_text_empty():
 
     assert applied == 0
     assert mappings == {}
+
+
+def test_split_text_into_logical_paragraphs():
+    from src.worker.agents.resume_formatter.injector import split_text_into_logical_paragraphs
+
+    text = (
+        "John Doe\n"
+        "Software Engineer\n"
+        "\n"
+        "Summary:\n"
+        "A highly motivated engineer with 5 years of experience building scalable applications.\n"
+        "Experienced in Python, React, and AWS Cloud services.\n"
+        "\n"
+        "Experience:\n"
+        "- Developed the backend for the main web platform using FastAPI.\n"
+        "  Led a team of three developers to successfully launch the project.\n"
+        "- Managed CI/CD pipelines.\n"
+    )
+
+    paras = split_text_into_logical_paragraphs(text)
+    
+    # We expect:
+    # 1. "John Doe"
+    # 2. "Software Engineer"
+    # 3. "Summary:"
+    # 4. "A highly motivated engineer with 5 years of experience building scalable applications. Experienced in Python, React, and AWS Cloud services."
+    # 5. "Experience:"
+    # 6. "- Developed the backend for the main web platform using FastAPI. Led a team of three developers to successfully launch the project."
+    # 7. "- Managed CI/CD pipelines."
+    
+    assert len(paras) == 7
+    assert paras[0] == "John Doe"
+    assert paras[1] == "Software Engineer"
+    assert paras[2] == "Summary:"
+    assert "scalable applications. Experienced in" in paras[3]
+    assert paras[4] == "Experience:"
+    assert paras[5] == "- Developed the backend for the main web platform using FastAPI. Led a team of three developers to successfully launch the project."
+    assert paras[6] == "- Managed CI/CD pipelines."
+

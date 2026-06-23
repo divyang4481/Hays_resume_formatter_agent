@@ -935,7 +935,12 @@ def render_resume(state: ResumeFormatState) -> ResumeFormatState:
     try:
         template_bytes = object_store.get_bytes(template["object_key"])
         print("[RenderResume] Injecting deterministic render payload into template...")
-        docx_bytes = inject_render_payload_into_docx(template_bytes, payload, manifest)
+        docx_bytes = inject_render_payload_into_docx(
+            template_bytes,
+            payload,
+            manifest,
+            resume_object_key=state.get("resume_object_key"),
+        )
         state["rendered_bytes"] = docx_bytes
         state["status"] = JobStatus.COMPLETED
         print(f"[RenderResume] Rendered DOCX: {len(docx_bytes)} bytes")

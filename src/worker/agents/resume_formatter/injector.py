@@ -453,7 +453,62 @@ def _inject_array_paragraphs(
 # Main injection dispatcher — uses injection_details from manifest
 # ---------------------------------------------------------------------------
 
-def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, field: dict) -> bool:
+def split_text_into_logical_paragraphs(text: str) -> list[str]:
+    """Split unstructured resume text into logical paragraphs to prevent word-wrap fragmentation."""
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines()]
+    paragraphs = []
+    current_paragraph = []
+
+    for line in lines:
+        if not line:
+            if current_paragraph:
+                paragraphs.append(" ".join(current_paragraph))
+                current_paragraph = []
+            continue
+
+        # Check if line starts with a list bullet/marker
+        # Matches bullets like •, -, *, ▪, ◦ or numbered list items like 1. or a)
+        is_bullet = False
+        if re.match(r"^([•\-\*\u2022▪◦]|\[?x\]?|\d+\.|\w\))\s", line) or re.match(r"^([•\-\*\u2022▪◦]|\[?x\]?)\w", line):
+            is_bullet = True
+
+        if is_bullet:
+            if current_paragraph:
+                paragraphs.append(" ".join(current_paragraph))
+            current_paragraph = [line]
+        else:
+            if current_paragraph:
+                prev_line = current_paragraph[-1]
+                should_merge = True
+                
+                # Heuristics for not merging:
+                # 1. Previous line is short (likely a heading or title)
+                if len(prev_line) < 50:
+                    should_merge = False
+                # 2. Previous line ends with a colon (likely a section header)
+                elif prev_line.endswith(":"):
+                    should_merge = False
+                # 3. Previous line ends with sentence-ending punctuation and the next line is capitalized
+                elif prev_line[-1] in (".", "!", "?") and line[0].isupper():
+                    should_merge = False
+                
+                if should_merge:
+                    current_paragraph.append(line)
+                else:
+                    paragraphs.append(" ".join(current_paragraph))
+                    current_paragraph = [line]
+            else:
+                current_paragraph = [line]
+
+    if current_paragraph:
+        paragraphs.append(" ".join(current_paragraph))
+
+    return [p for p in paragraphs if p.strip()]
+
+
+def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, field: dict, resume_object_key: str | None = None) -> bool:
     """Inject value selectively only in the paragraphs or table cells matching source_block_ids."""
     source_block_ids = field.get("source_block_ids") or []
     if not source_block_ids:
@@ -527,27 +582,55 @@ def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, fi
                             r.getparent().remove(r)
 
                         if not first_p_replaced:
-                            lines = [line.rstrip() for line in value.splitlines()]
-                            if lines:
-                                para.add_run(lines[0])
-                            
-                            p_elem = para._element
-                            p_parent = p_elem.getparent()
-                            insert_after = p_elem
-                            
-                            for line in lines[1:]:
-                                cloned_p = copy.deepcopy(p_elem)
-                                for r in cloned_p.findall(".//" + qn("w:r")):
-                                    r.getparent().remove(r)
-                                cloned_para = Paragraph(cloned_p, para._parent)
-                                cloned_para.add_run(line)
+                            docx_copied = False
+                            if resume_object_key and resume_object_key.lower().endswith(".docx"):
+                                try:
+                                    from src.shared.storage import object_store
+                                    resume_bytes = object_store.get_bytes(resume_object_key)
+                                    original_doc = Document(BytesIO(resume_bytes))
+                                    
+                                    p_elem = para._element
+                                    p_parent = p_elem.getparent()
+                                    insert_after = p_elem
+                                    
+                                    original_body = original_doc._element.body
+                                    inserted_count = 0
+                                    for child in list(original_body):
+                                        if child.tag in (qn("w:p"), qn("w:tbl")):
+                                            cloned_child = copy.deepcopy(child)
+                                            p_index = p_parent.index(insert_after)
+                                            p_parent.insert(p_index + 1, cloned_child)
+                                            insert_after = cloned_child
+                                            inserted_count += 1
+                                            
+                                    if inserted_count > 0:
+                                        p_parent.remove(p_elem)
+                                        docx_copied = True
+                                        print(f"  [Targeted Instruction] Successfully copy-pasted {inserted_count} XML elements from original docx resume: {resume_object_key}")
+                                except Exception as docx_err:
+                                    print(f"Error copying original docx elements: {docx_err}. Falling back to text splitting.")
+                                    
+                            if not docx_copied:
+                                logical_paras = split_text_into_logical_paragraphs(value)
+                                if logical_paras:
+                                    para.add_run(logical_paras[0])
                                 
-                                p_index = p_parent.index(insert_after)
-                                p_parent.insert(p_index + 1, cloned_p)
-                                insert_after = cloned_p
+                                p_elem = para._element
+                                p_parent = p_elem.getparent()
+                                insert_after = p_elem
                                 
+                                for p_text in logical_paras[1:]:
+                                    cloned_p = copy.deepcopy(p_elem)
+                                    for r in cloned_p.findall(".//" + qn("w:r")):
+                                        r.getparent().remove(r)
+                                    cloned_para = Paragraph(cloned_p, para._parent)
+                                    cloned_para.add_run(p_text)
+                                    
+                                    p_index = p_parent.index(insert_after)
+                                    p_parent.insert(p_index + 1, cloned_p)
+                                    insert_after = cloned_p
+                                    
                             first_p_replaced = True
-                            print(f"  [Targeted Instruction] Injected well-formatted value ({len(lines)} lines) into paragraph block {block_id}")
                         else:
                             para.text = ""
                             print(f"  [Targeted Instruction] Cleared paragraph block {block_id}")
@@ -555,6 +638,7 @@ def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, fi
                     except Exception as e:
                         print(f"Error replacing instruction block {block_id}: {e}")
         return replaced
+
 
     for block_pos, block_id in enumerate(source_block_ids):
         if block_id.startswith("tbl_"):
@@ -1096,6 +1180,7 @@ def inject_data_into_docx(
     docx_bytes: bytes,
     extracted: dict[str, Any],
     manifest_fields: list[dict[str, Any]],
+    resume_object_key: str | None = None,
 ) -> bytes:
     """Inject extracted resume values into the DOCX template using per-field injection strategy."""
     doc = Document(BytesIO(docx_bytes))
@@ -1185,7 +1270,7 @@ def inject_data_into_docx(
                 tokens_to_try.append(token[1:-1].strip())
 
             for tok_variant in tokens_to_try:
-                if _inject_targeted_value(doc, fname, tok_variant, serialized, field):
+                if _inject_targeted_value(doc, fname, tok_variant, serialized, field, resume_object_key=resume_object_key):
                     targeted_injected_fields.add(fname)
                     populated_fields.add(fname)
                     print(f"  [Targeted Injection] successfully replaced {fname} in specified blocks using '{tok_variant}'")
@@ -1393,7 +1478,7 @@ def inject_data_into_docx(
     return out_io.getvalue()
 
 
-def inject_render_payload_into_docx(template_bytes: bytes, payload: dict, manifest: dict) -> bytes:
+def inject_render_payload_into_docx(template_bytes: bytes, payload: dict, manifest: dict, resume_object_key: str | None = None) -> bytes:
     fields = manifest.get("fields", []) if isinstance(manifest, dict) else []
     data = {}
     data.update(payload.get("render_values", {}))
@@ -1412,4 +1497,4 @@ def inject_render_payload_into_docx(template_bytes: bytes, payload: dict, manife
 
     for block_name, items in (payload.get("repeat_blocks", {}) or {}).items():
         data[block_name] = items
-    return inject_data_into_docx(template_bytes, data, fields)
+    return inject_data_into_docx(template_bytes, data, fields, resume_object_key=resume_object_key)
