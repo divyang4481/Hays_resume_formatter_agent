@@ -18,6 +18,12 @@ Field handling rules:
 
 For work experience style fields, extract each role with dates, organisation, and responsibilities where available.
 
+Smart Extraction & Chronological Sorting Rules:
+- **Smart Key Skills Extraction (At least Top 5):** If the resume does not contain a dedicated "Skills" section, or if the listed skills are fewer than 5, you must be smart and scan the work experience, achievements, responsibilities, projects, and education to infer and identify the top key skills used or demonstrated. You must extract at least the top 5 important key skills, and list/sort them in chronological order of adoption or order of importance.
+- **Education Sorting:** Extract all education history. You must sort all extracted education entries in strict chronological order (oldest first, from the earliest start/end year/date to the newest).
+- **Work Experience Sorting:** Extract all employment history/roles. You must sort all work experience entries in strict chronological order (oldest first, starting with the earliest job/role date and progressing to the most recent/present one).
+- **Professional Qualifications / Certifications Sorting:** Extract all certifications, credentials, admissions, and qualifications. Sort them in strict chronological order (oldest first) or by order of professional importance/relevance.
+
 Keep all extracted text and bullet points extremely concise and summarized (max 10 words per bullet point/string). Do not copy long sentences verbatim; summarize key facts only to stay under the token limit.
 
 Missing evidence rules:
@@ -31,6 +37,7 @@ Qualification field rules:
 - Extract all professional qualifications, certifications, admissions, or licenses, even if they are listed under Education, Academic, or Admission sections.
 - The sub-field keys in an `array_object` are derived from target template tokens (e.g., `check_type` from `CheckType`). Map actual resume list items (like qualification titles) directly into these keys, even if the key name is not a literal match (e.g., map the qualification name/title string to the `check_type` key).
 - Scan sections like 'Education', 'Qualifications', 'Admission', or 'Professional' in the resume to find these credentials.
+- Sort all extracted qualifications chronologically (oldest first) or in order of importance.
 
 
 Few-shot examples:

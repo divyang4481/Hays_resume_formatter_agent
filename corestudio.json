@@ -1,0 +1,10 @@
+{
+  "project_name": "Hays_resume_formatter_agent",
+  "language_target": "javascript",
+  "execution_environment": {
+    "autocomplete": "local://webgpu/Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",
+    "heavy_reasoning": "local://webgpu/Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",
+    "agent_framework_export": "semantic-kernel"
+  },
+  "mcp_servers": {}
+}

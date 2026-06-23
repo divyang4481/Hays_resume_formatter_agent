@@ -1,25 +1,32 @@
-param(
-  [ValidateSet("DeployAll", "DeployInfra", "DeployEcr", "DeployEcs", "Scale")]
-  [string]$Action = "DeployAll",
-  [string]$DBPassword,
-  [string]$Region = "ap-south-1",
-  [string]$ProjectName = "hay-agent",
-  [string]$Environment = "dev",
-  [string]$VpcId = "vpc-77ca851f",
-  [string]$SubnetIds = "subnet-0fbd1d43,subnet-4c26e037",
-  [string]$DBUsername = "dbadmin",
-  [string]$AllowedIngressCidr = "0.0.0.0/0",
-  [int]$ApiDesiredCount = 0,
-  [int]$WorkerDesiredCount = 0,
-  [int]$FrontendDesiredCount = 0,
-  [string]$Version = "latest",
-  [ValidateSet("api", "worker", "frontend")]
-  [string]$ServiceToScale,
-  [int]$DesiredCount = 1,
-  [switch]$SkipBuild
+    param(
+    [ValidateSet("DeployAll", "DeployInfra", "DeployEcr", "DeployEcs", "Scale")]
+    [string]$Action = "DeployAll",
+    [string]$DBPassword,
+    [string]$Region = "ap-south-1",
+    [string]$ProjectName = "hay-agent",
+    [string]$Environment = "dev",
+    [string]$VpcId = "vpc-77ca851f",
+    [string]$SubnetIds = "subnet-0fbd1d43,subnet-4c26e037",
+    [string]$DBUsername = "dbadmin",
+    [string]$AllowedIngressCidr = "0.0.0.0/0",
+    [int]$ApiDesiredCount = 1,
+    [int]$WorkerDesiredCount = 1,
+    [int]$FrontendDesiredCount = 1,
+    [string]$Version = "latest",
+    [ValidateSet("api", "worker", "frontend")]
+    [string]$ServiceToScale,
+    [int]$DesiredCount = 1,
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
+
+function Check-LastExitCode {
+    param([string]$errorMessage)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$errorMessage (Exit code: $LASTEXITCODE)"
+    }
+}
 
 # Stack Names Configuration
 $infraStackName = "$ProjectName-infra-$Environment"
@@ -84,11 +91,11 @@ function Deploy-Infra {
     $infraTemplate = Join-Path $PSScriptRoot "..\infra\cloudformation\hay-agent-infra.yaml"
     Write-Host "[Deploy] Running aws cloudformation deploy..."
     aws cloudformation deploy `
-      --template-file $infraTemplate `
-      --stack-name $infraStackName `
-      --parameter-overrides ProjectName=$ProjectName Environment=$Environment VpcId=$VpcId SubnetIds=$SubnetIds DBPassword=$DBPassword DBUsername=$DBUsername AllowedIngressCidr=$AllowedIngressCidr `
-      --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM `
-      --region $Region
+        --template-file $infraTemplate `
+        --stack-name $infraStackName `
+        --parameter-overrides ProjectName=$ProjectName Environment=$Environment VpcId=$VpcId SubnetIds=$SubnetIds DBPassword=$DBPassword DBUsername=$DBUsername AllowedIngressCidr=$AllowedIngressCidr `
+        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM `
+        --region $Region
 }
 
 # -------------------------------------------------------------
@@ -101,51 +108,86 @@ function Deploy-Ecr {
     
     $ecrTemplate = Join-Path $PSScriptRoot "..\cloudformation.yaml"
     Write-Host "[Deploy] Running aws cloudformation deploy for ECR Repositories..."
-    aws cloudformation deploy `
-      --template-file $ecrTemplate `
-      --stack-name $ecrStackName `
-      --parameter-overrides ProjectName=$ProjectName Environment=$Environment `
-      --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM `
-      --region $Region
+    & aws cloudformation deploy `
+        --template-file $ecrTemplate `
+        --stack-name $ecrStackName `
+        --parameter-overrides ProjectName=$ProjectName Environment=$Environment `
+        --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM `
+        --region $Region
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[Deploy] Warning: ECR Stack deploy returned exit code $LASTEXITCODE. Proceeding with existing repositories..." -ForegroundColor Yellow
+    }
 
     if ($SkipBuild) {
         Write-Host "[Build] -SkipBuild specified. Skipping docker build/push."
         return
     }
 
-    # Fetch repository URIs
-    $ecrOutputs = aws cloudformation describe-stacks --stack-name $ecrStackName --region $Region --query "Stacks[0].Outputs" --output json | ConvertFrom-Json
-    $apiRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "ApiRepositoryUri" }).OutputValue
-    $workerRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "WorkerRepositoryUri" }).OutputValue
-    $frontendRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "FrontendRepositoryUri" }).OutputValue
+    # Fetch repository URIs or build them dynamically
+    $registry = "$accountId.dkr.ecr.$Region.amazonaws.com"
+    $apiRepoUri = $null
+    $workerRepoUri = $null
+    $frontendRepoUri = $null
+
+    try {
+        $ecrOutputs = aws cloudformation describe-stacks --stack-name $ecrStackName --region $Region --query "Stacks[0].Outputs" --output json 2>$null | ConvertFrom-Json
+        if ($ecrOutputs) {
+            $apiRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "ApiRepositoryUri" }).OutputValue
+            $workerRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "WorkerRepositoryUri" }).OutputValue
+            $frontendRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "FrontendRepositoryUri" }).OutputValue
+        }
+    }
+    catch {}
+
+    if (-not $apiRepoUri) {
+        $apiRepoUri = "$registry/$ProjectName-api-$Environment"
+        Write-Host "[Deploy] Using fallback ECR URI for API: $apiRepoUri" -ForegroundColor Gray
+    }
+    if (-not $workerRepoUri) {
+        $workerRepoUri = "$registry/$ProjectName-worker-$Environment"
+        Write-Host "[Deploy] Using fallback ECR URI for Worker: $workerRepoUri" -ForegroundColor Gray
+    }
+    if (-not $frontendRepoUri) {
+        $frontendRepoUri = "$registry/$ProjectName-frontend-$Environment"
+        Write-Host "[Deploy] Using fallback ECR URI for Frontend: $frontendRepoUri" -ForegroundColor Gray
+    }
 
     # ECR Login
-    $registry = "$accountId.dkr.ecr.$Region.amazonaws.com"
     Write-Host "[Build] Logging in to ECR: $registry..."
     aws ecr get-login-password --region $Region | docker login --username AWS --password-stdin $registry
+    Check-LastExitCode "Failed to log in to ECR."
 
     # Docker Build
     Write-Host "[Build] Building API container: $apiRepoUri..."
     docker build -f docker/Dockerfile -t "${apiRepoUri}:latest" -t "${apiRepoUri}:${Version}" .
+    Check-LastExitCode "Failed to build API container."
     
     Write-Host "[Build] Building Worker container: $workerRepoUri..."
     docker build -f docker/Dockerfile -t "${workerRepoUri}:latest" -t "${workerRepoUri}:${Version}" .
+    Check-LastExitCode "Failed to build Worker container."
     
     Write-Host "[Build] Building Frontend container: $frontendRepoUri..."
     docker build -f docker/Dockerfile.frontend -t "${frontendRepoUri}:latest" -t "${frontendRepoUri}:${Version}" .
+    Check-LastExitCode "Failed to build Frontend container."
 
     # Docker Push
     Write-Host "[Push] Pushing API image to ECR..."
     docker push "${apiRepoUri}:latest"
+    Check-LastExitCode "Failed to push API image (latest)."
     docker push "${apiRepoUri}:${Version}"
+    Check-LastExitCode "Failed to push API image ($Version)."
     
     Write-Host "[Push] Pushing Worker image to ECR..."
     docker push "${workerRepoUri}:latest"
+    Check-LastExitCode "Failed to push Worker image (latest)."
     docker push "${workerRepoUri}:${Version}"
+    Check-LastExitCode "Failed to push Worker image ($Version)."
     
     Write-Host "[Push] Pushing Frontend image to ECR..."
     docker push "${frontendRepoUri}:latest"
+    Check-LastExitCode "Failed to push Frontend image (latest)."
     docker push "${frontendRepoUri}:${Version}"
+    Check-LastExitCode "Failed to push Frontend image ($Version)."
 
     Write-Host "[Push] All images successfully built and pushed to ECR."
 }
@@ -184,10 +226,92 @@ function Deploy-Ecs {
     
     # Check ECR stack and get image URIs
     Write-Host "[Deploy] Retrieving outputs from ECR Repositories stack..."
-    $ecrOutputs = aws cloudformation describe-stacks --stack-name $ecrStackName --region $Region --query "Stacks[0].Outputs" --output json | ConvertFrom-Json
-    $apiRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "ApiRepositoryUri" }).OutputValue
-    $workerRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "WorkerRepositoryUri" }).OutputValue
-    $frontendRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "FrontendRepositoryUri" }).OutputValue
+    $registry = "$accountId.dkr.ecr.$Region.amazonaws.com"
+    $apiRepoUri = $null
+    $workerRepoUri = $null
+    $frontendRepoUri = $null
+
+    try {
+        $ecrOutputs = aws cloudformation describe-stacks --stack-name $ecrStackName --region $Region --query "Stacks[0].Outputs" --output json 2>$null | ConvertFrom-Json
+        if ($ecrOutputs) {
+            $apiRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "ApiRepositoryUri" }).OutputValue
+            $workerRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "WorkerRepositoryUri" }).OutputValue
+            $frontendRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "FrontendRepositoryUri" }).OutputValue
+        }
+    }
+    catch {}
+
+    if (-not $apiRepoUri) { $apiRepoUri = "$registry/$ProjectName-api-$Environment" }
+    if (-not $workerRepoUri) { $workerRepoUri = "$registry/$ProjectName-worker-$Environment" }
+    if (-not $frontendRepoUri) { $frontendRepoUri = "$registry/$ProjectName-frontend-$Environment" }
+    
+    $apiImage = "${apiRepoUri}:${Version}"
+    $workerImage = "${workerRepoUri}:${Version}"
+    $frontendImage = "${frontendRepoUri}:${Version}"
+    
+    # Resolve dynamic environment configurations from local .env or defaults
+    $bedrockAgentId = Get-EnvVal "BEDROCK_AGENT_ID" ""
+    $bedrockAgentAliasId = Get-EnvVal "BEDROCK_AGENT_ALIAS_ID" ""
+    $bedrockKbId = Get-EnvVal "BEDROCK_KB_ID" ""
+    $enableDocling = Get-EnvVal "ENABLE_DOCLING" "true"
+    $enableTikaFallback = Get-EnvVal "ENABLE_TIKA_FALLBACK" "true"
+    $enableGpuWorker = Get-EnvVal "ENABLE_GPU_WORKER" "false"
+    $parserTimeoutSeconds = Get-EnvVal "PARSER_TIMEOUT_SECONDS" "300"
+    $maxFileSizeMb = Get-EnvVal "MAX_FILE_SIZE_MB" "10"
+    $llmBackend = Get-EnvVal "LLM_BACKEND" "aws_bedrock"
+    $llmModelName = Get-EnvVal "LLM_MODEL_NAME" "meta.llama3-70b-instruct-v1:0"
+    $bedrockTemplateAnalysisModelId = Get-EnvVal "BEDROCK_TEMPLATE_ANALYSIS_MODEL_ID" "qwen.qwen3-235b-a22b-2507-v1:0"
+    $bedrockFallbackModelId = Get-EnvVal "BEDROCK_FALLBACK_MODEL_ID" "qwen.qwen3-235b-a22b-2507-v1:0"
+    $llmProvider = Get-EnvVal "LLM_PROVIDER" "bedrock"
+    $llmModelFast = Get-EnvVal "LLM_MODEL_FAST" "qwen.qwen3-235b-a22b-2507-v1:0"
+    $llmModelStrong = Get-EnvVal "LLM_MODEL_STRONG" "qwen.qwen3-235b-a22b-2507-v1:0"
+    $enableAuth = Get-EnvVal "ENABLE_AUTH" "false"
+    $logLevel = Get-EnvVal "LOG_LEVEL" "INFO"
+
+    $ecsTemplate = Join-Path $PSScriptRoot "..\infra\cloudformation\ecs-infra.yaml"
+    
+    $params = @(
+        "ProjectName=$ProjectName",
+        "Environment=$Environment",
+        "VpcId=$VpcId",
+        "SubnetIds=$SubnetIds",
+        "StorageBucketName=$storageBucket",
+        "SQSQueueArn=$sqsQueueArn",
+        "SQSQueueUrl=$sqsQueueUrl",
+        "DatabaseUrl=$databaseUrl",
+        "ApiImageUri=$apiImage",
+        "WorkerImageUri=$workerImage",
+        "FrontendImageUri=$frontendImage",
+        "ApiDesiredCount=$ApiDesiredCount",
+        "WorkerDesiredCount=$WorkerDesiredCount",
+        "FrontendDesiredCount=$FrontendDesiredCount",
+        "BedrockAgentId=$bedrockAgentId",
+        "BedrockAgentAliasId=$bedrockAgentAliasId",
+        "BedrockKbId=$bedrockKbId",
+        "EnableDocling=$enableDocling",
+        "EnableTikaFallback=$enableTikaFallback",
+        "EnableGpuWorker=$enableGpuWorker",
+        "ParserTimeoutSeconds=$parserTimeoutSeconds",
+        "MaxFileSizeMb=$maxFileSizeMb",
+        "LlmBackend=$llmBackend",
+        "LlmModelName=$llmModelName",
+        "BedrockTemplateAnalysisModelId=$bedrockTemplateAnalysisModelId",
+        "BedrockFallbackModelId=$bedrockFallbackModelId",
+        "LlmProvider=$llmProvider",
+        "LlmModelFast=$llmModelFast",
+        "LlmModelStrong=$llmModelStrong",
+        "EnableAuth=$enableAuth",
+        "LogLevel=$logLevel"
+        if ($ecrOutputs) {
+            $apiRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "ApiRepositoryUri" }).OutputValue
+            $workerRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "WorkerRepositoryUri" }).OutputValue
+            $frontendRepoUri = ($ecrOutputs | Where-Object { $_.OutputKey -eq "FrontendRepositoryUri" }).OutputValue
+        }
+    } catch {}
+
+    if (-not $apiRepoUri) { $apiRepoUri = "$registry/$ProjectName-api-$Environment" }
+    if (-not $workerRepoUri) { $workerRepoUri = "$registry/$ProjectName-worker-$Environment" }
+    if (-not $frontendRepoUri) { $frontendRepoUri = "$registry/$ProjectName-frontend-$Environment" }
     
     $apiImage = "${apiRepoUri}:${Version}"
     $workerImage = "${workerRepoUri}:${Version}"

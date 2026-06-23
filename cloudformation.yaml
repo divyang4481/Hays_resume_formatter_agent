@@ -15,10 +15,34 @@ Parameters:
       - staging
       - prod
     Description: Deployment environment suffix for repository names.
+  CreateApiRepo:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  CreateWorkerRepo:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  CreateFrontendRepo:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  ShouldCreateApiRepo: !Equals [ !Ref CreateApiRepo, "true" ]
+  ShouldCreateWorkerRepo: !Equals [ !Ref CreateWorkerRepo, "true" ]
+  ShouldCreateFrontendRepo: !Equals [ !Ref CreateFrontendRepo, "true" ]
 
 Resources:
   ApiRepository:
     Type: AWS::ECR::Repository
+    Condition: ShouldCreateApiRepo
     Properties:
       RepositoryName: !Sub "${ProjectName}-api-${Environment}"
       ImageScanningConfiguration:
@@ -43,6 +67,7 @@ Resources:
 
   WorkerRepository:
     Type: AWS::ECR::Repository
+    Condition: ShouldCreateWorkerRepo
     Properties:
       RepositoryName: !Sub "${ProjectName}-worker-${Environment}"
       ImageScanningConfiguration:
@@ -67,6 +92,7 @@ Resources:
 
   FrontendRepository:
     Type: AWS::ECR::Repository
+    Condition: ShouldCreateFrontendRepo
     Properties:
       RepositoryName: !Sub "${ProjectName}-frontend-${Environment}"
       ImageScanningConfiguration:
@@ -91,14 +117,14 @@ Resources:
 
 Outputs:
   ApiRepositoryName:
-    Value: !Ref ApiRepository
+    Value: !If [ShouldCreateApiRepo, !Ref ApiRepository, !Sub "${ProjectName}-api-${Environment}"]
   WorkerRepositoryName:
-    Value: !Ref WorkerRepository
+    Value: !If [ShouldCreateWorkerRepo, !Ref WorkerRepository, !Sub "${ProjectName}-worker-${Environment}"]
   FrontendRepositoryName:
-    Value: !Ref FrontendRepository
+    Value: !If [ShouldCreateFrontendRepo, !Ref FrontendRepository, !Sub "${ProjectName}-frontend-${Environment}"]
   ApiRepositoryUri:
-    Value: !GetAtt ApiRepository.RepositoryUri
+    Value: !If [ShouldCreateApiRepo, !GetAtt ApiRepository.RepositoryUri, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-api-${Environment}"]
   WorkerRepositoryUri:
-    Value: !GetAtt WorkerRepository.RepositoryUri
+    Value: !If [ShouldCreateWorkerRepo, !GetAtt WorkerRepository.RepositoryUri, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-worker-${Environment}"]
   FrontendRepositoryUri:
-    Value: !GetAtt FrontendRepository.RepositoryUri
+    Value: !If [ShouldCreateFrontendRepo, !GetAtt FrontendRepository.RepositoryUri, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-frontend-${Environment}"]

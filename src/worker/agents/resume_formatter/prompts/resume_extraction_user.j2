@@ -17,7 +17,10 @@ Instructions:
 - If a field has field_type "array_object", extract all visible entries from the resume into a JSON array of objects.
 - Use the sub_fields in each array_object field as the object keys.
 - For repeatable sections, use the section heading and block_tokens from the manifest plan to keep entries grouped correctly.
-- For work experience fields, each array item should represent one role or employment entry.
+- For work experience fields, each array item should represent one role or employment entry. You must sort these entries in strict chronological order (oldest first).
+- For education fields, you must sort all entries in strict chronological order (oldest first).
+- For professional qualifications/certifications, you must sort all entries in strict chronological order (oldest first) or by order of importance.
+- For key skills fields, if the list is short or missing, you must infer and extract the top key skills (aim for at least 5) based on the candidate's work history, responsibilities, and projects, and list/sort them by importance or adoption order.
 - For array fields, return a JSON array of strings.
 - For scalar fields, return a single string.
 - If a field cannot be confidently extracted, return an empty string, empty array, or empty object matching its shape.

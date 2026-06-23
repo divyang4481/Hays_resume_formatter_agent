@@ -111,6 +111,7 @@ class LLMClient:
         semantic_probe = " ".join(
             str(field.get(k) or "") for k in ("name", "display_label", "source_hint")
         ).lower()
+        
         if any(term in semantic_probe for term in ("qualif", "certif", "accredit", "license", "licence")):
             candidates.extend([
                 "Certification",
@@ -119,6 +120,17 @@ class LLMClient:
                 "Professional qualifications",
                 "Licenses",
                 "Accreditations",
+            ])
+        
+        if any(term in semantic_probe for term in ("skill", "capability", "competenc", "expertise")):
+            candidates.extend([
+                "Skills",
+                "Key Skills",
+                "Core Skills",
+                "Technical Skills",
+                "Capabilities",
+                "Expertise",
+                "Scan all work experience, responsibilities, projects, and achievements to infer/extract top key skills"
             ])
 
         unique: list[str] = []

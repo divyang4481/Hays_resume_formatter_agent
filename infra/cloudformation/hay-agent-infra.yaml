@@ -42,11 +42,19 @@ Parameters:
     Type: String
     Default: 0.0.0.0/0
     Description: IP CIDR range allowed to connect to PostgreSQL (5432).
+  ExistingStorageBucketName:
+    Type: String
+    Default: ""
+    Description: Name of an existing S3 bucket to use. If provided, a new S3 bucket will not be created.
+
+Conditions:
+  CreateS3Bucket: !Equals [ !Ref ExistingStorageBucketName, "" ]
 
 Resources:
   # S3 Bucket for Templates and Processed Resumes
   HayAgentStorageBucket:
     Type: AWS::S3::Bucket
+    Condition: CreateS3Bucket
     Properties:
       BucketName: !Sub ${ProjectName}-storage-${Environment}-${AWS::AccountId}-${AWS::Region}
       VersioningConfiguration:
@@ -143,7 +151,7 @@ Outputs:
     Value: !Ref AWS::StackName
     Description: CloudFormation Stack Name
   S3BucketName:
-    Value: !Ref HayAgentStorageBucket
+    Value: !If [CreateS3Bucket, !Ref HayAgentStorageBucket, !Ref ExistingStorageBucketName]
     Description: Name of S3 bucket for resume and template storage
   TemplatesFolderPrefix:
     Value: templates/
