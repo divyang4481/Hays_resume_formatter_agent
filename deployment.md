@@ -114,8 +114,15 @@ aws cloudformation deploy `
 ```
 
 ### 5. Deploy ECS Cluster, ALB & Services (Part 3)
-Retrieve the outputs from Step 4 and Step 2 to populate these fields.
-*(Replace `<DB_IDENTIFIER>` with your RDS DB instance host URL sub-domain identifier from Step 4)*
+
+> [!WARNING]
+> If deploying manually, you **must** replace `<DB_IDENTIFIER>` in the `DatabaseUrl` parameter below with your actual RDS host endpoint subdomain identifier (e.g., `ctgoo20ag6cj`). You can find this in the outputs of the Part 1 Infrastructure Stack (`DBEndpointAddress`).
+> 
+> **Highly Recommended:** Instead of running the manual CloudFormation commands below, use the automated PowerShell deployment script which automatically resolves all identifiers, VPC/Subnet settings, and endpoints:
+> ```powershell
+> .\scripts\deploy-aws.ps1 -Action DeployEcs -DBPassword "HaysAdmin123!#" -Region "ap-south-1" -ProjectName "hay-agent" -Environment "dev"
+> ```
+
 ```powershell
 aws cloudformation deploy `
   --template-file infra/cloudformation/ecs-infra.yaml `

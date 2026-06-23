@@ -527,9 +527,27 @@ def _inject_targeted_value(doc: Document, fname: str, token: str, value: str, fi
                             r.getparent().remove(r)
 
                         if not first_p_replaced:
-                            para.add_run(value)
+                            lines = [line.rstrip() for line in value.splitlines()]
+                            if lines:
+                                para.add_run(lines[0])
+                            
+                            p_elem = para._element
+                            p_parent = p_elem.getparent()
+                            insert_after = p_elem
+                            
+                            for line in lines[1:]:
+                                cloned_p = copy.deepcopy(p_elem)
+                                for r in cloned_p.findall(".//" + qn("w:r")):
+                                    r.getparent().remove(r)
+                                cloned_para = Paragraph(cloned_p, para._parent)
+                                cloned_para.add_run(line)
+                                
+                                p_index = p_parent.index(insert_after)
+                                p_parent.insert(p_index + 1, cloned_p)
+                                insert_after = cloned_p
+                                
                             first_p_replaced = True
-                            print(f"  [Targeted Instruction] Injected value into paragraph block {block_id}")
+                            print(f"  [Targeted Instruction] Injected well-formatted value ({len(lines)} lines) into paragraph block {block_id}")
                         else:
                             para.text = ""
                             print(f"  [Targeted Instruction] Cleared paragraph block {block_id}")
